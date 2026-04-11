@@ -1,5 +1,5 @@
 {
   "name": "Prisma Visualizer Pro",
-  "description": "Um visualizador e editor interativo de schemas Prisma com validação em tempo real e exportação.",
+  "description": "Visualizador interativo de schemas Prisma com auto-layout, busca, tooltips de enums e playground de dados (Web DB) para testes.",
   "requestFramePermissions": []
 }
