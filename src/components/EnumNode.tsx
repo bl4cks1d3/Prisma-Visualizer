@@ -3,7 +3,7 @@ import React, { memo } from 'react';
 import { PrismaEnum } from '@/src/lib/prisma-parser';
 import { Badge } from '@/components/ui/badge';
 
-export const EnumNode = memo(({ data }: { data: PrismaEnum }) => {
+export const EnumNode = ({ data }: { data: PrismaEnum }) => {
   return (
     <div className="bg-white dark:bg-zinc-900 border-2 border-indigo-200 dark:border-indigo-900/50 rounded-lg shadow-lg min-w-[180px] overflow-hidden">
       <div className="bg-indigo-50 dark:bg-indigo-900/20 px-4 py-2 border-b border-indigo-100 dark:border-indigo-900/30 flex items-center justify-between">
@@ -19,6 +19,6 @@ export const EnumNode = memo(({ data }: { data: PrismaEnum }) => {
       </div>
     </div>
   );
-});
+};
 
 EnumNode.displayName = 'EnumNode';

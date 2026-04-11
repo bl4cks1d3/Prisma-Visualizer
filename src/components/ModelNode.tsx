@@ -15,7 +15,7 @@ interface ModelNodeProps {
   data: PrismaModel & { enums: PrismaEnum[] };
 }
 
-export const ModelNode = memo(({ data }: ModelNodeProps) => {
+export const ModelNode = ({ data }: ModelNodeProps) => {
   return (
     <div className="bg-[#1e1e24] border border-zinc-800 rounded-md shadow-2xl min-w-[280px] overflow-hidden transition-all hover:border-indigo-500/50">
       <div className="bg-[#18181b] px-3 py-2 border-b border-zinc-800 flex items-center justify-between">
@@ -55,7 +55,7 @@ export const ModelNode = memo(({ data }: ModelNodeProps) => {
                     {enumData ? (
                       <TooltipProvider delay={0}>
                         <Tooltip>
-                          <TooltipTrigger asChild>
+                          <TooltipTrigger>
                             <span className="text-[10px] font-mono text-zinc-500 cursor-help flex items-center justify-end gap-1">
                               {field.type}
                               <span className="bg-zinc-800 text-[8px] px-1 rounded border border-zinc-700">E</span>
@@ -90,6 +90,6 @@ export const ModelNode = memo(({ data }: ModelNodeProps) => {
       </div>
     </div>
   );
-});
+};
 
 ModelNode.displayName = 'ModelNode';
