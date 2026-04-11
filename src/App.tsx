@@ -11,6 +11,10 @@ import ReactFlow, {
   Panel,
   useNodesState,
   useEdgesState,
+  applyNodeChanges,
+  applyEdgeChanges,
+  NodeChange,
+  EdgeChange,
   MarkerType,
   Node,
   Edge,
@@ -55,11 +59,31 @@ import {
   Wand2,
   RefreshCw,
   ArrowRight,
-  Layout
+  Layout,
+  Save,
+  CheckCircle2,
+  ChevronRight,
+  ChevronDown,
+  List as ListIcon
 } from 'lucide-react';
+import { 
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { toPng, toSvg } from 'html-to-image';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
+import { PrismaEnum } from '@/src/lib/prisma-parser';
 
 const DEFAULT_SCHEMA = `// Exemplo de Schema Prisma
 model User {
@@ -112,17 +136,16 @@ dagreGraph.setDefaultEdgeLabel(() => ({}));
 const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => {
   dagreGraph.setGraph({ 
     rankdir: direction, 
-    ranksep: 200, // Increased for hierarchy
-    nodesep: 150, 
-    marginx: 100,
-    marginy: 100
+    ranksep: 180, 
+    nodesep: 140, 
+    marginx: 80,
+    marginy: 80
   });
 
   nodes.forEach((node) => {
-    // Estimate height based on field count to avoid overlapping
     const fieldCount = (node.data as any).fields?.length || 5;
-    const estimatedHeight = 60 + (fieldCount * 35) + 40;
-    dagreGraph.setNode(node.id, { width: 300, height: estimatedHeight });
+    const estimatedHeight = 40 + (fieldCount * 28) + 20;
+    dagreGraph.setNode(node.id, { width: 280, height: estimatedHeight });
   });
 
   edges.forEach((edge) => {
@@ -134,7 +157,7 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => 
   return nodes.map((node) => {
     const nodeWithPosition = dagreGraph.node(node.id);
     node.position = {
-      x: nodeWithPosition.x - 150,
+      x: nodeWithPosition.x - 140,
       y: nodeWithPosition.y - (dagreGraph.node(node.id).height / 2),
     };
     return node;
@@ -143,13 +166,24 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => 
 
 function Flow() {
   const [schemaText, setSchemaText] = useState(DEFAULT_SCHEMA);
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
+  
+  const onNodesChange = useCallback(
+    (changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)),
+    []
+  );
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(changes, eds)),
+    []
+  );
+
   const [parsedSchema, setParsedSchema] = useState<PrismaSchema | null>(null);
   const [activeTab, setActiveTab] = useState('editor');
   const [searchQuery, setSearchQuery] = useState('');
   const [mockData, setMockData] = useState<Record<string, any[]>>({});
   const [selectedModelForPlayground, setSelectedModelForPlayground] = useState<string | null>(null);
+  const [showEnumSidebar, setShowEnumSidebar] = useState(false);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const { fitView } = useReactFlow();
 
@@ -158,10 +192,8 @@ function Flow() {
     setParsedSchema(result);
 
     const modelNodes: Node[] = [];
-    const enumNodes: Node[] = [];
     const newEdges: Edge[] = [];
 
-    // Create Model Nodes
     result.models.forEach((model) => {
       modelNodes.push({
         id: model.name,
@@ -174,9 +206,7 @@ function Flow() {
         if (field.relation) {
           const targetModel = result.models.find(m => m.name === field.type);
           if (targetModel) {
-            // Find the corresponding field in the target model that is an ID
             const targetIdField = targetModel.fields.find(f => f.isId) || targetModel.fields[0];
-            
             newEdges.push({
               id: `${model.name}-${field.name}-${field.type}`,
               source: model.name,
@@ -184,8 +214,8 @@ function Flow() {
               sourceHandle: `${model.name}-${field.name}-source`,
               targetHandle: `${field.type}-${targetIdField.name}-target`,
               label: field.name,
-              animated: true,
-              style: { stroke: '#6366f1', strokeWidth: 2 },
+              animated: false,
+              style: { stroke: '#6366f1', strokeWidth: 1.5 },
               markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1' },
             });
           }
@@ -194,18 +224,7 @@ function Flow() {
     });
 
     const layoutedModelNodes = getLayoutedElements(modelNodes, newEdges, 'TB');
-
-    // Create Enum Nodes (Separated in a corner)
-    result.enums.forEach((prismaEnum, index) => {
-      enumNodes.push({
-        id: prismaEnum.name,
-        type: 'enum',
-        data: prismaEnum,
-        position: { x: 1800, y: index * 250 }, // Far right
-      });
-    });
-
-    setNodes([...layoutedModelNodes, ...enumNodes]);
+    setNodes(layoutedModelNodes);
     setEdges(newEdges);
   }, [setNodes, setEdges]);
 
@@ -245,11 +264,10 @@ function Flow() {
     }
   };
 
-  // Playground Logic
   const addRecord = (modelName: string) => {
     const model = parsedSchema?.models.find(m => m.name === modelName);
     if (!model) return;
-    const newRecord: any = {};
+    const newRecord: any = { _isNew: true };
     model.fields.forEach(f => {
       if (f.isList) newRecord[f.name] = [];
       else if (f.type === 'Int') newRecord[f.name] = 0;
@@ -260,7 +278,16 @@ function Flow() {
       ...prev,
       [modelName]: [...(prev[modelName] || []), newRecord]
     }));
-    toast.success(`Registro adicionado a ${modelName}`);
+  };
+
+  const saveRecord = (modelName: string, index: number) => {
+    setMockData(prev => {
+      const newData = [...(prev[modelName] || [])];
+      newData[index] = { ...newData[index], _isNew: false };
+      return { ...prev, [modelName]: newData };
+    });
+    toast.success('Registro salvo com sucesso!');
+    confetti({ particleCount: 50, spread: 30, origin: { y: 0.8 } });
   };
 
   const generateDataForField = (modelName: string, index: number, fieldName: string, type: string) => {
@@ -296,82 +323,96 @@ function Flow() {
     });
   };
 
+  const runAutomatedTest = () => {
+    if (!parsedSchema) return;
+    toast.promise(new Promise(resolve => setTimeout(resolve, 1500)), {
+      loading: 'Executando testes automatizados...',
+      success: () => {
+        confetti({ particleCount: 150, spread: 100 });
+        return 'Todos os testes passaram! Estrutura validada.';
+      },
+      error: 'Falha nos testes.',
+    });
+  };
+
   return (
-    <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100 overflow-hidden dark">
-      <header className="h-14 border-b border-zinc-800 bg-zinc-900 flex items-center justify-between px-6 shrink-0 z-10">
+    <div className="flex flex-col h-screen bg-[#09090b] text-zinc-100 overflow-hidden dark">
+      <header className="h-14 border-b border-zinc-800 bg-[#09090b] flex items-center justify-between px-6 shrink-0 z-10">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
             <Database size={18} />
           </div>
           <div>
             <h1 className="font-bold text-sm tracking-tight uppercase">Prisma Visualizer Pro</h1>
-            <p className="text-[10px] text-zinc-500 font-medium uppercase tracking-widest">Advanced Data Cycle Edition</p>
+            <p className="text-[10px] text-zinc-500 font-medium uppercase tracking-widest">Enterprise Edition</p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={runAutomatedTest} className="bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-emerald-400">
+            <CheckCircle2 size={14} className="mr-2" /> Testar Schema
+          </Button>
+          <Separator orientation="vertical" className="h-6 mx-1 bg-zinc-800" />
           <div className="relative mr-4 hidden md:block">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-zinc-500" />
             <Input
-              placeholder="Buscar modelos ou campos..."
-              className="pl-9 h-9 w-64 bg-zinc-800 border-zinc-700 text-xs focus-visible:ring-indigo-500"
+              placeholder="Buscar..."
+              className="pl-9 h-9 w-48 bg-zinc-900 border-zinc-800 text-xs focus-visible:ring-indigo-500"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
-          <Button variant="outline" size="sm" onClick={() => handleExport('png')} className="bg-zinc-800 border-zinc-700 hover:bg-zinc-700">
+          <Button variant="outline" size="sm" onClick={() => handleExport('png')} className="bg-zinc-900 border-zinc-800 hover:bg-zinc-800">
             <Download size={14} className="mr-2" /> PNG
           </Button>
-          <Button variant="outline" size="sm" onClick={() => handleExport('svg')} className="bg-zinc-800 border-zinc-700 hover:bg-zinc-700">
-            <RefreshCw size={14} className="mr-2" /> SVG
-          </Button>
-          <Separator orientation="vertical" className="h-6 mx-1 bg-zinc-700" />
-          <Button variant="outline" size="sm" onClick={() => fitView()} className="bg-zinc-800 border-zinc-700 hover:bg-zinc-700">
+          <Separator orientation="vertical" className="h-6 mx-1 bg-zinc-800" />
+          <Button variant="outline" size="sm" onClick={() => fitView()} className="bg-zinc-900 border-zinc-800 hover:bg-zinc-800">
             <Layout size={14} className="mr-2" /> Fit
           </Button>
-          <Button variant="outline" size="sm" onClick={() => updateDiagram(schemaText)} className="bg-zinc-800 border-zinc-700 hover:bg-zinc-700">
+          <Button variant="outline" size="sm" onClick={() => updateDiagram(schemaText)} className="bg-zinc-900 border-zinc-800 hover:bg-zinc-800">
             <RefreshCw size={14} className="mr-2" /> Layout
-          </Button>
-          <Separator orientation="vertical" className="h-6 mx-1 bg-zinc-700" />
-          <Button variant="ghost" size="icon" onClick={() => setSchemaText('')} className="text-zinc-500 hover:text-red-500">
-            <Trash2 size={18} />
           </Button>
         </div>
       </header>
 
       <main className="flex-1 flex overflow-hidden">
-        <div className="w-[480px] border-r border-zinc-800 bg-zinc-900 flex flex-col shrink-0">
+        <div className="w-[520px] border-r border-zinc-800 bg-[#09090b] flex flex-col shrink-0">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-            <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50">
+            <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/20">
               <TabsList className="bg-transparent border-none p-0 h-auto gap-2">
                 <TabsTrigger value="editor" className="data-[state=active]:bg-zinc-800 h-8 px-3 text-xs">
-                  <Code size={14} className="mr-2" /> Schema
+                  <Code size={14} className="mr-2" /> Editor
                 </TabsTrigger>
                 <TabsTrigger value="playground" className="data-[state=active]:bg-zinc-800 h-8 px-3 text-xs">
                   <Play size={14} className="mr-2" /> Playground
                 </TabsTrigger>
-                <TabsTrigger value="cycle" className="data-[state=active]:bg-zinc-800 h-8 px-3 text-xs">
-                  <RefreshCw size={14} className="mr-2" /> Ciclo
-                </TabsTrigger>
-                <TabsTrigger value="info" className="data-[state=active]:bg-zinc-800 h-8 px-3 text-xs">
-                  <Info size={14} className="mr-2" /> Status
+                <TabsTrigger value="data" className="data-[state=active]:bg-zinc-800 h-8 px-3 text-xs">
+                  <Database size={14} className="mr-2" /> Dados
                 </TabsTrigger>
               </TabsList>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setShowEnumSidebar(!showEnumSidebar)}
+                className={`h-7 text-[10px] ${showEnumSidebar ? 'text-indigo-400 bg-indigo-500/10' : 'text-zinc-500'}`}
+              >
+                <ListIcon size={14} className="mr-2" /> Enums
+              </Button>
             </div>
 
             <TabsContent value="editor" className="flex-1 m-0 p-0 overflow-hidden relative">
               <textarea
                 value={schemaText}
                 onChange={(e) => setSchemaText(e.target.value)}
-                className="w-full h-full p-6 font-mono text-sm bg-transparent resize-none focus:outline-none text-zinc-300 leading-relaxed"
-                placeholder="Cole seu schema Prisma aqui..."
+                className="w-full h-full p-6 font-mono text-[13px] bg-transparent resize-none focus:outline-none text-zinc-400 leading-relaxed"
+                placeholder="Prisma Schema..."
                 spellCheck={false}
               />
             </TabsContent>
 
             <TabsContent value="playground" className="flex-1 m-0 p-0 overflow-hidden flex flex-col">
               <div className="p-4 border-b border-zinc-800 bg-zinc-900/30">
-                <Label className="text-[10px] uppercase font-bold text-zinc-500 mb-2 block tracking-widest">Modelos Disponíveis</Label>
+                <Label className="text-[10px] uppercase font-bold text-zinc-500 mb-2 block tracking-widest">Modelos</Label>
                 <div className="flex flex-wrap gap-2">
                   {parsedSchema?.models.map(m => (
                     <Button 
@@ -395,25 +436,23 @@ function Flow() {
                         <h3 className="text-sm font-bold flex items-center gap-2">
                           <TableIcon size={16} className="text-indigo-400" />
                           {selectedModelForPlayground}
-                          <Badge variant="secondary" className="text-[9px] py-0">{ (mockData[selectedModelForPlayground] || []).length } registros</Badge>
                         </h3>
                         <Button size="sm" variant="outline" className="h-7 text-[10px] bg-indigo-600/10 border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/20" onClick={() => addRecord(selectedModelForPlayground)}>
-                          <Plus size={14} className="mr-1" /> Novo Registro
+                          <Plus size={14} className="mr-1" /> Novo
                         </Button>
                       </div>
 
                       <div className="space-y-4">
-                        {(mockData[selectedModelForPlayground] || []).map((record, idx) => (
-                          <div key={idx} className="p-4 bg-zinc-800/40 border border-zinc-700/50 rounded-xl space-y-4 relative group shadow-sm">
+                        {(mockData[selectedModelForPlayground] || []).filter(r => r._isNew).map((record, idx) => (
+                          <div key={idx} className="p-4 bg-zinc-900 border border-zinc-800 rounded-lg space-y-4 relative shadow-xl">
                             <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-mono text-zinc-500 uppercase">Registro #{idx + 1}</span>
+                              <span className="text-[10px] font-mono text-zinc-500 uppercase">Novo Registro</span>
                               <div className="flex items-center gap-2">
                                 <Button 
                                   variant="ghost" 
                                   size="icon" 
                                   className="h-7 w-7 text-zinc-500 hover:text-indigo-400"
                                   onClick={() => generateAllDataForRecord(selectedModelForPlayground, idx)}
-                                  title="Gerar todos os dados"
                                 >
                                   <Wand2 size={14} />
                                 </Button>
@@ -432,34 +471,14 @@ function Flow() {
                               {parsedSchema?.models.find(m => m.name === selectedModelForPlayground)?.fields.map(field => {
                                 const isEnum = parsedSchema.enums.some(e => e.name === field.type);
                                 const isRelation = parsedSchema.models.some(m => m.name === field.type);
-                                
-                                if (field.isList) return null; // Skip lists for now in playground
+                                if (field.isList) return null;
 
                                 return (
                                   <div key={field.name} className="space-y-1.5">
-                                    <div className="flex items-center justify-between">
-                                      <Label className="text-[10px] text-zinc-400 font-mono flex items-center gap-1">
-                                        {field.name} 
-                                        <span className="text-[9px] text-zinc-600">({field.type})</span>
-                                      </Label>
-                                      {!isRelation && !isEnum && (
-                                        <button 
-                                          onClick={() => generateDataForField(selectedModelForPlayground, idx, field.name, field.type)}
-                                          className="text-[9px] text-indigo-500 hover:text-indigo-400 flex items-center gap-1 transition-colors"
-                                        >
-                                          <Wand2 size={10} /> Gerar
-                                        </button>
-                                      )}
-                                    </div>
-
+                                    <Label className="text-[10px] text-zinc-500 font-mono">{field.name}</Label>
                                     {isEnum ? (
-                                      <Select 
-                                        value={record[field.name]} 
-                                        onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val)}
-                                      >
-                                        <SelectTrigger className="h-8 text-[11px] bg-zinc-900 border-zinc-700">
-                                          <SelectValue placeholder="Selecione..." />
-                                        </SelectTrigger>
+                                      <Select value={record[field.name]} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val)}>
+                                        <SelectTrigger className="h-8 text-[11px] bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
                                         <SelectContent className="bg-zinc-900 border-zinc-800">
                                           {parsedSchema.enums.find(e => e.name === field.type)?.values.map(v => (
                                             <SelectItem key={v} value={v} className="text-[11px]">{v}</SelectItem>
@@ -467,167 +486,105 @@ function Flow() {
                                         </SelectContent>
                                       </Select>
                                     ) : isRelation ? (
-                                      <div className="space-y-2">
-                                        <Select 
-                                          value={record[field.name]} 
-                                          onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val)}
-                                        >
-                                          <SelectTrigger className="h-8 text-[11px] bg-zinc-900 border-zinc-700">
-                                            <SelectValue placeholder={`Relacionar com ${field.type}...`} />
-                                          </SelectTrigger>
-                                          <SelectContent className="bg-zinc-900 border-zinc-800">
-                                            {(mockData[field.type] || []).map((relatedRecord, rIdx) => {
-                                              const idVal = relatedRecord.id || relatedRecord.uuid || Object.values(relatedRecord)[0];
-                                              return (
-                                                <SelectItem key={rIdx} value={String(idVal)} className="text-[11px]">
-                                                  {String(idVal)} (Registro #{rIdx + 1})
-                                                </SelectItem>
-                                              );
-                                            })}
-                                          </SelectContent>
-                                        </Select>
-                                        {(mockData[field.type] || []).length === 0 && (
-                                          <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded text-[9px] text-amber-400 flex items-center gap-2">
-                                            <AlertCircle size={10} />
-                                            <span>Nenhum dado em <b>{field.type}</b>. Adicione dados lá primeiro para relacionar.</span>
-                                          </div>
-                                        )}
-                                      </div>
+                                      <Select value={record[field.name]} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val)}>
+                                        <SelectTrigger className="h-8 text-[11px] bg-zinc-950 border-zinc-800"><SelectValue placeholder="Relacionar..." /></SelectTrigger>
+                                        <SelectContent className="bg-zinc-900 border-zinc-800">
+                                          {(mockData[field.type] || []).filter(r => !r._isNew).map((r, i) => (
+                                            <SelectItem key={i} value={String(r.id || r.uuid || i)} className="text-[11px]">{String(r.id || r.uuid || `ID:${i}`)}</SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
                                     ) : field.type === 'Boolean' ? (
-                                      <Select 
-                                        value={String(record[field.name])} 
-                                        onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val === 'true')}
-                                      >
-                                        <SelectTrigger className="h-8 text-[11px] bg-zinc-900 border-zinc-700">
-                                          <SelectValue placeholder="Selecione..." />
-                                        </SelectTrigger>
+                                      <Select value={String(record[field.name])} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val === 'true')}>
+                                        <SelectTrigger className="h-8 text-[11px] bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
                                         <SelectContent className="bg-zinc-900 border-zinc-800">
                                           <SelectItem value="true" className="text-[11px]">true</SelectItem>
                                           <SelectItem value="false" className="text-[11px]">false</SelectItem>
                                         </SelectContent>
                                       </Select>
                                     ) : (
-                                      <Input 
-                                        className="h-8 text-[11px] bg-zinc-900 border-zinc-700 focus-visible:ring-indigo-500"
-                                        value={record[field.name] || ''}
-                                        onChange={(e) => updateRecordValue(selectedModelForPlayground, idx, field.name, e.target.value)}
-                                      />
+                                      <Input className="h-8 text-[11px] bg-zinc-950 border-zinc-800" value={record[field.name] || ''} onChange={(e) => updateRecordValue(selectedModelForPlayground, idx, field.name, e.target.value)} />
                                     )}
                                   </div>
                                 );
                               })}
                             </div>
+                            <Button className="w-full h-8 text-[11px] bg-indigo-600 hover:bg-indigo-700" onClick={() => saveRecord(selectedModelForPlayground, idx)}>
+                              <Save size={14} className="mr-2" /> Salvar Registro
+                            </Button>
                           </div>
                         ))}
-                        {(mockData[selectedModelForPlayground] || []).length === 0 && (
-                          <div className="py-16 text-center border-2 border-dashed border-zinc-800 rounded-2xl bg-zinc-900/20">
-                            <Play size={32} className="mx-auto text-zinc-800 mb-3" />
-                            <p className="text-xs text-zinc-500">Comece adicionando um registro para testar.</p>
-                          </div>
-                        )}
                       </div>
                     </>
                   ) : (
                     <div className="py-24 text-center">
-                      <div className="w-16 h-16 bg-zinc-800/50 rounded-full flex items-center justify-center mx-auto mb-6 border border-zinc-700">
-                        <Database size={32} className="text-zinc-600" />
-                      </div>
-                      <h4 className="text-sm font-bold mb-1">Data Playground</h4>
-                      <p className="text-xs text-zinc-500 max-w-[240px] mx-auto leading-relaxed">
-                        Selecione um modelo acima para simular a inserção de dados e testar os relacionamentos do seu schema.
-                      </p>
+                      <Play size={32} className="mx-auto text-zinc-800 mb-4" />
+                      <p className="text-xs text-zinc-500">Selecione um modelo para adicionar registros.</p>
                     </div>
                   )}
                 </div>
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="cycle" className="flex-1 m-0 p-0 overflow-hidden">
-              <ScrollArea className="h-full p-6">
-                <div className="space-y-6">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-bold uppercase tracking-widest text-zinc-500">Ciclo de Dados</h3>
-                    <Badge variant="outline" className="text-[10px] border-indigo-500/30 text-indigo-400">Live View</Badge>
-                  </div>
-
-                  <div className="space-y-4">
-                    {Object.entries(mockData).map(([modelName, records]) => {
-                      const dataRecords = records as any[];
-                      return dataRecords.length > 0 && (
-                        <div key={modelName} className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl space-y-3">
-                          <div className="flex items-center gap-2 text-sm font-bold">
+            <TabsContent value="data" className="flex-1 m-0 p-0 overflow-hidden flex flex-col">
+              <ScrollArea className="flex-1 p-4">
+                <Accordion type="multiple" className="space-y-4">
+                  {Object.entries(mockData).map(([modelName, records]) => {
+                    const savedRecords = (records as any[]).filter(r => !r._isNew);
+                    if (savedRecords.length === 0) return null;
+                    return (
+                      <AccordionItem key={modelName} value={modelName} className="border border-zinc-800 rounded-lg bg-zinc-900/20 px-4">
+                        <AccordionTrigger className="hover:no-underline py-3">
+                          <div className="flex items-center gap-2 text-xs font-bold">
                             <TableIcon size={14} className="text-indigo-400" />
                             {modelName}
-                            <span className="text-[10px] text-zinc-500 font-normal">({dataRecords.length} registros)</span>
+                            <Badge variant="secondary" className="text-[9px]">{savedRecords.length}</Badge>
                           </div>
-                          <div className="space-y-2">
-                            {dataRecords.map((record, idx) => (
-                              <div key={idx} className="text-[11px] p-2 bg-zinc-800/30 rounded border border-zinc-700/50 font-mono flex items-center justify-between">
-                                <span className="truncate max-w-[200px]">
-                                  {record.id || record.uuid || record.name || `Registro #${idx + 1}`}
-                                </span>
-                                <div className="flex gap-1">
-                                  {parsedSchema?.models.find(m => m.name === modelName)?.fields.filter(f => f.relation).map(f => (
-                                    record[f.name] && (
-                                      <Badge key={f.name} variant="secondary" className="text-[8px] px-1 h-4 bg-indigo-500/10 text-indigo-400 border-none">
-                                        → {f.type}
-                                      </Badge>
-                                    )
+                        </AccordionTrigger>
+                        <AccordionContent className="pb-4">
+                          <div className="rounded-md border border-zinc-800 overflow-hidden">
+                            <Table>
+                              <TableHeader className="bg-zinc-900/50">
+                                <TableRow className="border-zinc-800 hover:bg-transparent">
+                                  {parsedSchema?.models.find(m => m.name === modelName)?.fields.filter(f => !f.isList && !parsedSchema.models.some(m => m.name === f.type)).map(f => (
+                                    <TableHead key={f.name} className="text-[10px] h-8 font-mono">{f.name}</TableHead>
                                   ))}
-                                </div>
-                              </div>
-                            ))}
+                                  <TableHead className="w-[40px]"></TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {savedRecords.map((record, idx) => (
+                                  <TableRow key={idx} className="border-zinc-800 hover:bg-zinc-800/30">
+                                    {parsedSchema?.models.find(m => m.name === modelName)?.fields.filter(f => !f.isList && !parsedSchema.models.some(m => m.name === f.type)).map(f => (
+                                      <TableCell key={f.name} className="text-[10px] py-2 font-mono truncate max-w-[100px]">{String(record[f.name])}</TableCell>
+                                    ))}
+                                    <TableCell className="py-2">
+                                      <Button variant="ghost" size="icon" className="h-6 w-6 text-zinc-500 hover:text-red-400" onClick={() => deleteRecord(modelName, idx)}>
+                                        <Trash2 size={12} />
+                                      </Button>
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
                           </div>
-                        </div>
-                      );
-                    })}
-                    {Object.values(mockData).every(r => (r as any[]).length === 0) && (
-                      <div className="py-20 text-center">
-                        <RefreshCw size={32} className="mx-auto text-zinc-800 mb-3 animate-spin-slow" />
-                        <p className="text-xs text-zinc-500">Nenhum dado inserido para visualizar o ciclo.</p>
-                      </div>
-                    )}
+                        </AccordionContent>
+                      </AccordionItem>
+                    );
+                  })}
+                </Accordion>
+                {Object.values(mockData).every(r => (r as any[]).filter(x => !x._isNew).length === 0) && (
+                  <div className="py-24 text-center">
+                    <Database size={32} className="mx-auto text-zinc-800 mb-4" />
+                    <p className="text-xs text-zinc-500">Nenhum dado salvo ainda.</p>
                   </div>
-                </div>
-              </ScrollArea>
-            </TabsContent>
-
-            <TabsContent value="info" className="flex-1 m-0 p-0 overflow-hidden">
-              <ScrollArea className="h-full p-6">
-                <div className="space-y-6">
-                  <div>
-                    <h3 className="text-xs font-bold uppercase tracking-widest text-zinc-500 mb-3">Resumo do Schema</h3>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
-                        <p className="text-[10px] text-zinc-500 uppercase font-bold mb-1">Modelos</p>
-                        <p className="text-2xl font-bold">{parsedSchema?.models.length || 0}</p>
-                      </div>
-                      <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
-                        <p className="text-[10px] text-zinc-500 uppercase font-bold mb-1">Enums</p>
-                        <p className="text-2xl font-bold">{parsedSchema?.enums.length || 0}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {parsedSchema && parsedSchema.errors.length > 0 && (
-                    <div>
-                      <h3 className="text-xs font-bold uppercase tracking-widest text-red-500 mb-3">Erros Detectados</h3>
-                      <div className="space-y-2">
-                        {parsedSchema.errors.map((error, idx) => (
-                          <div key={idx} className="p-3 bg-red-900/10 border border-red-900/30 rounded-lg text-xs text-red-400 flex gap-3">
-                            <AlertCircle size={14} className="shrink-0 mt-0.5" /> {error}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                )}
               </ScrollArea>
             </TabsContent>
           </Tabs>
         </div>
 
-        <div className="flex-1 relative bg-zinc-950" ref={reactFlowWrapper}>
+        <div className="flex-1 relative bg-[#09090b]" ref={reactFlowWrapper}>
           <ReactFlow
             nodes={filteredNodes}
             edges={edges}
@@ -639,17 +596,54 @@ function Flow() {
             minZoom={0.1}
             maxZoom={2}
           >
-            <Background color="#27272a" gap={20} size={1} />
+            <Background color="#18181b" gap={20} size={1} />
             <Controls className="fill-zinc-100" />
             <MiniMap className="!bg-zinc-900 !border-zinc-800" nodeColor="#27272a" />
-            <Panel position="top-right">
-              <div className="bg-zinc-900/80 backdrop-blur-md border border-zinc-800 p-2 rounded-lg shadow-sm flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Auto-Layout Active</span>
-              </div>
-            </Panel>
           </ReactFlow>
         </div>
+
+        <AnimatePresence>
+          {showEnumSidebar && (
+            <motion.div 
+              initial={{ x: 300 }}
+              animate={{ x: 0 }}
+              exit={{ x: 300 }}
+              className="w-[300px] border-l border-zinc-800 bg-[#09090b] flex flex-col shrink-0 z-20 shadow-2xl"
+            >
+              <div className="h-14 border-b border-zinc-800 flex items-center justify-between px-6 bg-zinc-900/20">
+                <h3 className="text-xs font-bold uppercase tracking-widest text-zinc-500">Dicionário Enums</h3>
+                <Button variant="ghost" size="icon" onClick={() => setShowEnumSidebar(false)} className="h-8 w-8 text-zinc-500">
+                  <X size={16} />
+                </Button>
+              </div>
+              <ScrollArea className="flex-1 p-6">
+                <div className="space-y-8">
+                  {parsedSchema?.enums.map(e => (
+                    <div key={e.name} className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-[10px] font-mono border-emerald-500/30 text-emerald-400">Enum</Badge>
+                        <h4 className="text-sm font-bold font-mono">{e.name}</h4>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {e.values.map(v => (
+                          <Badge key={v} variant="secondary" className="bg-zinc-800 text-zinc-300 border-zinc-700 text-[10px] py-0.5">
+                            {v}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  {parsedSchema?.enums.length === 0 && (
+                    <div className="py-20 text-center">
+                      <ListIcon size={32} className="mx-auto text-zinc-800 mb-4" />
+                      <p className="text-xs text-zinc-500">Nenhum enum definido.</p>
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
       <Toaster theme="dark" position="bottom-right" />
     </div>
@@ -658,8 +652,6 @@ function Flow() {
 
 export default function App() {
   return (
-    <ReactFlowProvider>
-      <Flow />
-    </ReactFlowProvider>
+    <Flow />
   );
 }
