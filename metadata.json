@@ -1,0 +1,5 @@
+{
+  "name": "Prisma Visualizer Pro",
+  "description": "Um visualizador e editor interativo de schemas Prisma com validação em tempo real e exportação.",
+  "requestFramePermissions": []
+}
