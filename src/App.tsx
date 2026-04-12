@@ -111,7 +111,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   generateSchemaFromPrompt, 
   explainSchema, 
-  generateRealisticData,
   setAIConfig,
   AIProvider,
   ChatMessage
@@ -610,10 +609,6 @@ function Flow() {
     toast.success('Registro salvo com sucesso!');
   };
 
-  const generateDataForField = (modelName: string, index: number, fieldName: string, type: string) => {
-    const val = generateMockValue(type, fieldName);
-    updateRecordValue(modelName, index, fieldName, val);
-  };
 
   const generateAllDataForRecord = (modelName: string, index: number) => {
     const model = parsedSchema?.models.find(m => m.name === modelName);
@@ -682,22 +677,6 @@ function Flow() {
     }
   };
 
-  const handleGenerateRealisticData = async (modelName: string) => {
-    setIsAiLoading(true);
-    try {
-      const data = await generateRealisticData(modelName, schemaText);
-      setMockData(prev => ({
-        ...prev,
-        [modelName]: [...(prev[modelName] || []), ...data.map(d => ({ ...d, _isNew: true }))]
-      }));
-      toast.success(`${data.length} registros gerados com IA!`);
-    } catch (err) {
-      console.error(err);
-      toast.error('Erro ao gerar dados com IA.');
-    } finally {
-      setIsAiLoading(false);
-    }
-  };
 
   const updateRecordValue = (modelName: string, index: number, field: string, value: any) => {
     setMockData(prev => {
@@ -1108,16 +1087,6 @@ function Flow() {
                           >
                             <Plus size={14} className="mr-1" /> Novo
                           </Button>
-                          <Button 
-                            size="sm" 
-                            variant="outline" 
-                            className="h-7 text-[10px] bg-emerald-600/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-600/20" 
-                            onClick={() => handleGenerateRealisticData(selectedModelForPlayground)}
-                            disabled={isAiLoading}
-                          >
-                            {isAiLoading ? <RefreshCw size={12} className="animate-spin mr-1" /> : <Wand2 size={12} className="mr-1" />}
-                            IA Realista
-                          </Button>
                         </div>
                       </div>
 
@@ -1133,6 +1102,7 @@ function Flow() {
                                     size="icon" 
                                     className="h-7 w-7 text-zinc-500 hover:text-indigo-400"
                                     onClick={() => generateAllDataForRecord(selectedModelForPlayground, idx)}
+                                    title="Gerar dados para este registro"
                                   >
                                     <Wand2 size={14} />
                                   </Button>

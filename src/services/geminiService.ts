@@ -141,39 +141,3 @@ export const explainSchema = async (schema: string): Promise<string> => {
   return response.text;
 };
 
-export const generateRealisticData = async (modelName: string, schema: string, count: number = 5): Promise<any[]> => {
-  const systemPrompt = `Generate ${count} realistic JSON objects for the Prisma model "${modelName}" based on the provided schema.
-    Return ONLY a valid JSON array of objects. Do not include any other text.`;
-
-  if (currentProvider === 'openrouter') {
-    const text = await callOpenRouter(`Schema:\n${schema}`, systemPrompt, true);
-    try {
-      return JSON.parse(text);
-    } catch (e) {
-      console.error("Failed to parse OpenRouter generated data", e);
-      return [];
-    }
-  }
-
-  const ai = getGeminiAI();
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: `${systemPrompt}\n\nSchema:\n${schema}`,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-        }
-      }
-    },
-  });
-
-  try {
-    return JSON.parse(response.text);
-  } catch (e) {
-    console.error("Failed to parse Gemini generated data", e);
-    return [];
-  }
-};
