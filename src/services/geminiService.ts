@@ -48,20 +48,71 @@ const callOpenRouter = async (prompt: string, systemPrompt: string, isJson: bool
   return data.choices[0].message.content;
 };
 
-export const generateSchemaFromPrompt = async (prompt: string): Promise<string> => {
-  const systemPrompt = `Generate a valid Prisma schema based on the description. 
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
+export const generateSchemaFromPrompt = async (prompt: string, history: ChatMessage[] = [], currentSchema?: string): Promise<string> => {
+  const systemPrompt = `You are an expert Prisma Schema builder. 
+    Your goal is to generate or adjust a valid Prisma schema based on the user's request.
+    ${currentSchema ? `Current Schema:\n${currentSchema}\n\nAdjust the schema above based on the new instructions.` : 'Generate a new schema.'}
     Return ONLY the schema code, without any markdown formatting or extra text. 
     Ensure it includes models, fields, types, and relations.`;
 
   if (currentProvider === 'openrouter') {
-    const text = await callOpenRouter(prompt, systemPrompt);
+    const messages: ChatMessage[] = [
+      { role: "system", content: systemPrompt },
+      ...history,
+      { role: "user", content: prompt }
+    ];
+    
+    const key = customApiKey || "";
+    if (!key) throw new Error("OpenRouter API Key is required");
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${key}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": window.location.origin,
+        "X-Title": "Prisma Schema Builder",
+      },
+      body: JSON.stringify({
+        model: openRouterModel,
+        messages: messages,
+        // Limit max tokens to avoid credit issues reported by user
+        max_tokens: 2048,
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || "OpenRouter API Error");
+    }
+
+    const data = await response.json();
+    const text = data.choices[0].message.content;
     return text.replace(/```prisma/g, '').replace(/```/g, '').trim();
   }
 
   const ai = getGeminiAI();
+  
+  // Format history for Gemini SDK
+  const contents = [
+    ...history.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }]
+    })),
+    {
+      role: 'user',
+      parts: [{ text: `${systemPrompt}\n\nUser Request: ${prompt}` }]
+    }
+  ];
+
   const response = await ai.models.generateContent({
     model: "gemini-3.1-pro-preview",
-    contents: `${systemPrompt}\n\nDescription: "${prompt}"`,
+    contents: contents,
     config: {
       temperature: 0.7,
     },

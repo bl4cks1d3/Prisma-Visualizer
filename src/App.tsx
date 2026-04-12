@@ -113,7 +113,8 @@ import {
   explainSchema, 
   generateRealisticData,
   setAIConfig,
-  AIProvider
+  AIProvider,
+  ChatMessage
 } from '@/src/services/geminiService';
 import { PrismaEnum } from '@/src/lib/prisma-parser';
 import {
@@ -423,6 +424,7 @@ function Flow() {
   const [aiProvider, setAiProvider] = React.useState<AIProvider>('gemini');
   const [openRouterModel, setOpenRouterModel] = React.useState('google/gemini-2.0-pro-exp-02-05:free');
   const [showApiKeyDialog, setShowApiKeyDialog] = React.useState(false);
+  const [chatHistory, setChatHistory] = React.useState<ChatMessage[]>([]);
   const reactFlowWrapper = React.useRef<HTMLDivElement>(null);
   const { fitView } = useReactFlow();
 
@@ -636,10 +638,19 @@ function Flow() {
     }
 
     setIsAiLoading(true);
+    const userMessage = aiPrompt;
     try {
-      const newSchema = await generateSchemaFromPrompt(aiPrompt);
+      const newSchema = await generateSchemaFromPrompt(userMessage, chatHistory, schemaText);
       setSchemaText(newSchema);
-      toast.success('Schema gerado com sucesso!');
+      
+      // Update history
+      setChatHistory(prev => [
+        ...prev,
+        { role: 'user', content: userMessage },
+        { role: 'assistant', content: 'Schema updated successfully.' }
+      ]);
+      
+      toast.success('Schema ajustado com sucesso!');
       setAiPrompt('');
     } catch (err: any) {
       console.error(err);
@@ -996,6 +1007,19 @@ function Flow() {
                   >
                     <Info size={14} className="mr-1" /> Explicar Schema
                   </Button>
+                  {chatHistory.length > 0 && (
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-8 text-[10px] text-zinc-500 hover:text-rose-400"
+                      onClick={() => {
+                        setChatHistory([]);
+                        toast.info('Histórico de conversa limpo.');
+                      }}
+                    >
+                      <Trash2 size={12} className="mr-1" /> Limpar Contexto ({chatHistory.length / 2})
+                    </Button>
+                  )}
                   {aiProvider === 'openrouter' && (
                     <Badge variant="outline" className="text-[9px] border-zinc-800 text-zinc-500">
                       OpenRouter: {openRouterModel.split('/').pop()}
