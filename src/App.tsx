@@ -12,6 +12,9 @@ import ReactFlow, {
   useEdgesState,
   applyNodeChanges,
   applyEdgeChanges,
+  addEdge,
+  updateEdge,
+  Connection,
   NodeChange,
   EdgeChange,
   MarkerType,
@@ -29,6 +32,7 @@ import { parsePrismaSchema, PrismaSchema, PrismaModel } from '@/src/lib/prisma-p
 import { generateMockValue } from '@/src/lib/data-generator';
 import { ModelNode } from '@/src/components/ModelNode';
 import { EnumNode } from '@/src/components/EnumNode';
+import { RelationEdge } from '@/src/components/RelationEdge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -41,6 +45,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { 
   Select, 
@@ -74,8 +79,18 @@ import {
   ChevronRight,
   ChevronDown,
   Edit2,
-  List as ListIcon
+  List as ListIcon,
+  Key
 } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { 
   Accordion,
   AccordionContent,
@@ -93,6 +108,13 @@ import {
 import { toPng, toSvg } from 'html-to-image';
 import { jsPDF } from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
+import { 
+  generateSchemaFromPrompt, 
+  explainSchema, 
+  generateRealisticData,
+  setAIConfig,
+  AIProvider
+} from '@/src/services/geminiService';
 import { PrismaEnum } from '@/src/lib/prisma-parser';
 import {
   DndContext,
@@ -155,6 +177,10 @@ enum Role {
 const nodeTypes = {
   model: ModelNode,
   enum: EnumNode,
+};
+
+const edgeTypes = {
+  relation: RelationEdge,
 };
 
 const dagreGraph = new dagre.graphlib.Graph();
@@ -337,6 +363,45 @@ function Flow() {
   const [schemaText, setSchemaText] = React.useState(DEFAULT_SCHEMA);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node[]>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
+
+  const onConnect = React.useCallback(
+    (params: Connection) => setEdges((eds) => addEdge({ 
+      ...params, 
+      animated: true, 
+      style: { stroke: '#6366f1', strokeWidth: 1.5, strokeDasharray: '5 5' }, 
+      markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1' } 
+    }, eds)),
+    [setEdges]
+  );
+
+  const onEdgeUpdate = React.useCallback(
+    (oldEdge: Edge, newConnection: Connection) => setEdges((els) => updateEdge(oldEdge, newConnection, els)),
+    [setEdges]
+  );
+
+  const onEdgeClick = React.useCallback((_: any, edge: Edge) => {
+    setSelectedEdgeId(edge.id);
+  }, []);
+
+  const onPaneClick = React.useCallback(() => {
+    setSelectedEdgeId(null);
+  }, []);
+
+  const updateEdgeStyle = (edgeId: string, color: string, animated: boolean) => {
+    setEdges((eds) =>
+      eds.map((e) => {
+        if (e.id === edgeId) {
+          return {
+            ...e,
+            animated,
+            style: { ...e.style, stroke: color },
+            markerEnd: { ...(e.markerEnd as any), color },
+          };
+        }
+        return e;
+      })
+    );
+  };
   
   const [parsedSchema, setParsedSchema] = React.useState<PrismaSchema | null>(null);
   const [activeTab, setActiveTab] = React.useState('editor');
@@ -350,6 +415,14 @@ function Flow() {
   const [isSimulating, setIsSimulating] = React.useState(false);
   const [simulationResults, setSimulationResults] = React.useState<any[]>([]);
   const [editingRecord, setEditingRecord] = React.useState<{model: string, index: number} | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null);
+  const [aiPrompt, setAiPrompt] = React.useState('');
+  const [isAiLoading, setIsAiLoading] = React.useState(false);
+  const [schemaExplanation, setSchemaExplanation] = React.useState<string | null>(null);
+  const [apiKey, setApiKey] = React.useState('');
+  const [aiProvider, setAiProvider] = React.useState<AIProvider>('gemini');
+  const [openRouterModel, setOpenRouterModel] = React.useState('google/gemini-2.0-pro-exp-02-05:free');
+  const [showApiKeyDialog, setShowApiKeyDialog] = React.useState(false);
   const reactFlowWrapper = React.useRef<HTMLDivElement>(null);
   const { fitView } = useReactFlow();
 
@@ -402,10 +475,9 @@ function Flow() {
               target: field.type,
               sourceHandle: `${model.name}-${field.name}-source`,
               targetHandle: `${field.type}-${targetIdField.name}-target`,
-              label: field.name,
-              animated: false,
-              type: 'smoothstep',
-              style: { stroke: '#6366f1', strokeWidth: 1.5 },
+              animated: true,
+              type: 'relation',
+              style: { stroke: '#6366f1', strokeWidth: 1.5, strokeDasharray: '5 5' },
               markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1' },
             });
           }
@@ -449,8 +521,7 @@ function Flow() {
       if (format === 'pdf') {
         const dataUrl = await toPng(el, { 
           backgroundColor: '#09090b', 
-          quality: 1, 
-          pixelRatio: 2,
+          pixelRatio: 1.5,
           width: nodesBounds.width + 100,
           height: nodesBounds.height + 100,
           style: {
@@ -461,10 +532,11 @@ function Flow() {
         const pdf = new jsPDF({
           orientation: nodesBounds.width > nodesBounds.height ? 'landscape' : 'portrait',
           unit: 'px',
-          format: [nodesBounds.width + 100, nodesBounds.height + 100]
+          format: [nodesBounds.width + 100, nodesBounds.height + 100],
+          compress: true
         });
         
-        pdf.addImage(dataUrl, 'PNG', 0, 0, nodesBounds.width + 100, nodesBounds.height + 100);
+        pdf.addImage(dataUrl, 'PNG', 0, 0, nodesBounds.width + 100, nodesBounds.height + 100, undefined, 'FAST');
         pdf.save(`prisma-schema-${new Date().getTime()}.pdf`);
         toast.success(`Exportado como PDF com sucesso!`);
         return;
@@ -550,6 +622,61 @@ function Flow() {
       [modelName]: prev[modelName].filter((_, i) => i !== index)
     }));
     toast.info('Registro removido');
+  };
+
+  const handleGenerateSchemaWithAi = async () => {
+    if (!aiPrompt.trim()) return;
+    
+    // Se não houver chave configurada, abre o diálogo
+    const hasKey = aiProvider === 'gemini' ? (apiKey || process.env.GEMINI_API_KEY) : apiKey;
+    if (!hasKey) {
+      setShowApiKeyDialog(true);
+      toast.info(`Por favor, configure sua API Key do ${aiProvider === 'gemini' ? 'Gemini' : 'OpenRouter'} para continuar.`);
+      return;
+    }
+
+    setIsAiLoading(true);
+    try {
+      const newSchema = await generateSchemaFromPrompt(aiPrompt);
+      setSchemaText(newSchema);
+      toast.success('Schema gerado com sucesso!');
+      setAiPrompt('');
+    } catch (err: any) {
+      console.error(err);
+      toast.error(`Erro ao gerar schema: ${err.message || 'Verifique sua API Key.'}`);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const handleExplainSchema = async () => {
+    setIsAiLoading(true);
+    try {
+      const explanation = await explainSchema(schemaText);
+      setSchemaExplanation(explanation);
+    } catch (err) {
+      console.error(err);
+      toast.error('Erro ao explicar schema.');
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const handleGenerateRealisticData = async (modelName: string) => {
+    setIsAiLoading(true);
+    try {
+      const data = await generateRealisticData(modelName, schemaText);
+      setMockData(prev => ({
+        ...prev,
+        [modelName]: [...(prev[modelName] || []), ...data.map(d => ({ ...d, _isNew: true }))]
+      }));
+      toast.success(`${data.length} registros gerados com IA!`);
+    } catch (err) {
+      console.error(err);
+      toast.error('Erro ao gerar dados com IA.');
+    } finally {
+      setIsAiLoading(false);
+    }
   };
 
   const updateRecordValue = (modelName: string, index: number, field: string, value: any) => {
@@ -823,20 +950,99 @@ function Flow() {
               </Button>
             </div>
 
-            <TabsContent value="editor" className="flex-1 m-0 p-0 overflow-hidden relative">
-              <textarea
-                value={schemaText}
-                onChange={(e) => setSchemaText(e.target.value)}
-                className="w-full h-full p-6 font-mono text-[13px] bg-transparent resize-none focus:outline-none text-zinc-400 leading-relaxed"
-                placeholder="Prisma Schema..."
-                spellCheck={false}
-              />
+            <TabsContent value="editor" className="flex-1 m-0 p-0 overflow-hidden flex flex-col relative">
+              <div className="p-3 border-b border-zinc-800 bg-zinc-900/40 flex flex-col gap-2">
+                <div className="relative">
+                  <Textarea 
+                    placeholder="Descreva seu banco de dados (ex: 'Um sistema de blog com posts e tags')..." 
+                    className="min-h-[100px] text-[11px] bg-black/50 border-zinc-800 pr-24 resize-y"
+                    value={aiPrompt}
+                    onChange={(e) => setAiPrompt(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleGenerateSchemaWithAi();
+                      }
+                    }}
+                  />
+                  <div className="absolute right-2 bottom-2 flex flex-col gap-2">
+                    <Button 
+                      variant="ghost"
+                      size="icon"
+                      className={`h-8 w-8 ${apiKey ? 'text-emerald-400' : 'text-zinc-500'} hover:text-indigo-400 bg-black/40 border border-zinc-800`}
+                      onClick={() => setShowApiKeyDialog(true)}
+                      title="Configurar API Key"
+                    >
+                      <Key size={14} />
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      className="h-8 px-3 text-[10px] bg-indigo-600 hover:bg-indigo-500 shadow-lg"
+                      onClick={handleGenerateSchemaWithAi}
+                      disabled={isAiLoading || !aiPrompt.trim()}
+                    >
+                      {isAiLoading ? <RefreshCw size={12} className="animate-spin mr-1" /> : <Wand2 size={12} className="mr-1" />}
+                      Gerar
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="h-8 text-[10px] border-zinc-800 bg-zinc-900/50 text-zinc-400 hover:text-indigo-400"
+                    onClick={handleExplainSchema}
+                    disabled={isAiLoading}
+                  >
+                    <Info size={14} className="mr-1" /> Explicar Schema
+                  </Button>
+                  {aiProvider === 'openrouter' && (
+                    <Badge variant="outline" className="text-[9px] border-zinc-800 text-zinc-500">
+                      OpenRouter: {openRouterModel.split('/').pop()}
+                    </Badge>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex-1 relative overflow-hidden">
+                <textarea
+                  value={schemaText}
+                  onChange={(e) => setSchemaText(e.target.value)}
+                  className="w-full h-full p-6 font-mono text-[13px] bg-transparent resize-none focus:outline-none text-zinc-400 leading-relaxed"
+                  placeholder="Prisma Schema..."
+                  spellCheck={false}
+                />
+
+                <AnimatePresence>
+                  {schemaExplanation && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 20 }}
+                      className="absolute inset-x-4 bottom-4 p-4 bg-zinc-900/95 border border-indigo-500/30 rounded-xl shadow-2xl backdrop-blur-md z-20 max-h-[60%] overflow-auto no-scrollbar"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2 text-indigo-400">
+                          <Info size={14} />
+                          <span className="text-[10px] font-bold uppercase tracking-widest">Explicação da IA</span>
+                        </div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setSchemaExplanation(null)}>
+                          <X size={14} />
+                        </Button>
+                      </div>
+                      <div className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                        {schemaExplanation}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             </TabsContent>
 
-            <TabsContent value="playground" className="flex-1 m-0 p-0 overflow-hidden flex flex-col min-h-0">
-              <div className="p-4 border-b border-zinc-800 bg-zinc-900/30">
+            <TabsContent value="playground" className="flex-1 m-0 p-0 overflow-hidden flex-col min-h-0 data-[state=active]:flex">
+              <div className="p-4 border-b border-zinc-800 bg-zinc-900/30 shrink-0">
                 <Label className="text-[10px] uppercase font-bold text-zinc-500 mb-2 block tracking-widest">Modelos</Label>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto no-scrollbar">
                   {parsedSchema?.models.map(m => (
                     <Button 
                       key={m.name} 
@@ -851,8 +1057,8 @@ function Flow() {
                 </div>
               </div>
               
-              <ScrollArea className="flex-1 min-h-0">
-                <div className="p-4 space-y-6 pb-36">
+              <ScrollArea className="flex-1 min-h-0 w-full">
+                <div className="p-4 space-y-6 pb-40">
                   {selectedModelForPlayground ? (
                     <>
                       <div className="flex items-center justify-between">
@@ -860,9 +1066,26 @@ function Flow() {
                           <TableIcon size={16} className="text-indigo-400" />
                           {selectedModelForPlayground}
                         </h3>
-                        <Button size="sm" variant="outline" className="h-7 text-[10px] bg-indigo-600/10 border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/20" onClick={() => addRecord(selectedModelForPlayground)}>
-                          <Plus size={14} className="mr-1" /> Novo
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            className="h-7 text-[10px] bg-indigo-600/10 border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/20" 
+                            onClick={() => addRecord(selectedModelForPlayground)}
+                          >
+                            <Plus size={14} className="mr-1" /> Novo
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            className="h-7 text-[10px] bg-emerald-600/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-600/20" 
+                            onClick={() => handleGenerateRealisticData(selectedModelForPlayground)}
+                            disabled={isAiLoading}
+                          >
+                            {isAiLoading ? <RefreshCw size={12} className="animate-spin mr-1" /> : <Wand2 size={12} className="mr-1" />}
+                            IA Realista
+                          </Button>
+                        </div>
                       </div>
 
                       <div className="space-y-4">
@@ -954,7 +1177,7 @@ function Flow() {
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="simulador" className="flex-1 m-0 p-0 overflow-hidden flex flex-col min-h-0">
+            <TabsContent value="simulador" className="flex-1 m-0 p-0 overflow-hidden flex-col min-h-0 data-[state=active]:flex">
               <div className="p-4 border-b border-zinc-800 bg-zinc-900/30 flex items-center justify-between">
                 <div>
                   <h3 className="text-xs font-bold uppercase tracking-widest text-zinc-500">Fluxo de Teste</h3>
@@ -1109,7 +1332,7 @@ function Flow() {
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="data" className="flex-1 m-0 p-0 overflow-hidden flex flex-col min-h-0">
+            <TabsContent value="data" className="flex-1 m-0 p-0 overflow-hidden flex-col min-h-0 data-[state=active]:flex">
               <div className="p-4 border-b border-zinc-800 bg-zinc-900/30 flex items-center justify-between">
                 <h3 className="text-xs font-bold uppercase tracking-widest text-zinc-500">Banco de Dados Mock</h3>
                 <Button variant="outline" size="sm" onClick={clearAllData} className="h-7 text-[10px] text-rose-400 border-rose-500/20 hover:bg-rose-500/10">
@@ -1209,7 +1432,12 @@ function Flow() {
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onEdgeUpdate={onEdgeUpdate}
+            onEdgeClick={onEdgeClick}
+            onPaneClick={onPaneClick}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             fitView
             connectionLineType={ConnectionLineType.SmoothStep}
             minZoom={0.1}
@@ -1217,6 +1445,51 @@ function Flow() {
           >
             <Background color="#18181b" gap={20} size={1} />
             <Controls className="fill-zinc-100" />
+            
+            {selectedEdgeId && (
+              <Panel position="top-right" className="bg-zinc-900/90 border border-zinc-800 p-4 rounded-xl shadow-2xl backdrop-blur-md w-64 mr-4 mt-4">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-xs font-bold uppercase tracking-widest text-zinc-400">Propriedades da Linha</h4>
+                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setSelectedEdgeId(null)}>
+                    <X size={14} />
+                  </Button>
+                </div>
+                
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label className="text-[10px] text-zinc-500 uppercase font-bold">Cor da Relação</Label>
+                    <div className="flex gap-2">
+                      {['#6366f1', '#ec4899', '#10b981', '#f59e0b', '#ef4444'].map(color => (
+                        <button
+                          key={color}
+                          className={`w-6 h-6 rounded-full border-2 ${edges.find(e => e.id === selectedEdgeId)?.style?.stroke === color ? 'border-white' : 'border-transparent'}`}
+                          style={{ backgroundColor: color }}
+                          onClick={() => updateEdgeStyle(selectedEdgeId, color, edges.find(e => e.id === selectedEdgeId)?.animated || false)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[10px] text-zinc-500 uppercase font-bold">Animar Fluxo</Label>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className={`h-7 text-[10px] ${edges.find(e => e.id === selectedEdgeId)?.animated ? 'bg-indigo-600/20 text-indigo-400 border-indigo-500/30' : ''}`}
+                      onClick={() => updateEdgeStyle(selectedEdgeId, edges.find(e => e.id === selectedEdgeId)?.style?.stroke as string || '#6366f1', !edges.find(e => e.id === selectedEdgeId)?.animated)}
+                    >
+                      {edges.find(e => e.id === selectedEdgeId)?.animated ? 'Ativo' : 'Inativo'}
+                    </Button>
+                  </div>
+
+                  <div className="pt-2 border-t border-zinc-800">
+                    <p className="text-[10px] text-zinc-600 leading-tight">
+                      Esta linha representa a relação entre <span className="text-indigo-400 font-mono">{selectedEdgeId.split('-')[0]}</span> e <span className="text-indigo-400 font-mono">{selectedEdgeId.split('-')[2]}</span>.
+                    </p>
+                  </div>
+                </div>
+              </Panel>
+            )}
           </ReactFlow>
         </div>
 
@@ -1263,7 +1536,108 @@ function Flow() {
           )}
         </AnimatePresence>
       </main>
+      
+      <AnimatePresence>
+        {isAiLoading && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center"
+          >
+            <div className="bg-zinc-900 border border-indigo-500/30 p-8 rounded-2xl shadow-2xl flex flex-col items-center gap-4">
+              <div className="relative">
+                <div className="w-16 h-16 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin" />
+                <Wand2 className="absolute inset-0 m-auto text-indigo-400 animate-pulse" size={24} />
+              </div>
+              <div className="text-center">
+                <h3 className="text-sm font-bold text-white uppercase tracking-widest">IA em Ação</h3>
+                <p className="text-[10px] text-zinc-500 mt-1">Processando sua solicitação com Gemini...</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <Toaster theme="dark" position="bottom-right" />
+
+      <Dialog open={showApiKeyDialog} onOpenChange={setShowApiKeyDialog}>
+        <DialogContent className="sm:max-w-md bg-zinc-950 border-zinc-800 text-zinc-100">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Key className="size-4 text-indigo-400" />
+              Configurar IA
+            </DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Escolha o provedor e insira sua chave de API.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label className="text-xs font-medium text-zinc-300">Provedor</Label>
+              <Select value={aiProvider} onValueChange={(val: AIProvider) => setAiProvider(val)}>
+                <SelectTrigger className="bg-zinc-900 border-zinc-800">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-900 border-zinc-800">
+                  <SelectItem value="gemini">Google Gemini (Nativo)</SelectItem>
+                  <SelectItem value="openrouter">OpenRouter (Multi-model)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {aiProvider === 'openrouter' && (
+              <div className="space-y-2">
+                <Label className="text-xs font-medium text-zinc-300">Modelo OpenRouter</Label>
+                <Input 
+                  value={openRouterModel}
+                  onChange={(e) => setOpenRouterModel(e.target.value)}
+                  placeholder="ex: google/gemini-2.0-pro-exp-02-05:free"
+                  className="bg-zinc-900 border-zinc-800 text-xs"
+                />
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="api-key" className="text-xs font-medium text-zinc-300">
+                API Key
+              </Label>
+              <Textarea
+                id="api-key"
+                placeholder={`Insira sua chave do ${aiProvider === 'gemini' ? 'Gemini' : 'OpenRouter'} aqui...`}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                className="bg-zinc-900 border-zinc-800 focus:ring-indigo-500 min-h-[80px] text-xs font-mono"
+              />
+            </div>
+            
+            <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg flex gap-3">
+              <AlertCircle className="size-5 text-amber-400 shrink-0" />
+              <div className="space-y-1">
+                <p className="text-xs font-bold text-amber-200">Aviso Importante</p>
+                <p className="text-[11px] text-amber-200/70 leading-relaxed">
+                  Não guardamos sua API Key em nossos servidores. 
+                  Em caso de atualizar a página, o dado será perdido e você precisará inseri-la novamente.
+                </p>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button 
+              className="w-full bg-indigo-600 hover:bg-indigo-500" 
+              onClick={() => {
+                setAIConfig({ key: apiKey, provider: aiProvider, model: openRouterModel });
+                setShowApiKeyDialog(false);
+                if (apiKey) {
+                  toast.success(`Configurações do ${aiProvider} salvas!`);
+                }
+              }}
+            >
+              Salvar Configurações
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

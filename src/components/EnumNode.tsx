@@ -1,5 +1,6 @@
 
-import React, { memo } from 'react';
+import * as React from 'react';
+import { memo } from 'react';
 import { PrismaEnum } from '@/src/lib/prisma-parser';
 import { Badge } from '@/components/ui/badge';
 
