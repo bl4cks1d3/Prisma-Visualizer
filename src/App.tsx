@@ -369,8 +369,8 @@ function Flow() {
     (params: Connection) => setEdges((eds) => addEdge({ 
       ...params, 
       animated: true, 
-      style: { stroke: '#6366f1', strokeWidth: 1.5, strokeDasharray: '5 5' }, 
-      markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1' } 
+      style: { stroke: '#0891b2', strokeWidth: 1.5, strokeDasharray: '5 5' }, 
+      markerEnd: { type: MarkerType.ArrowClosed, color: '#0891b2' } 
     }, eds)),
     [setEdges]
   );
@@ -479,8 +479,8 @@ function Flow() {
               targetHandle: `${field.type}-${targetIdField.name}-target`,
               animated: true,
               type: 'relation',
-              style: { stroke: '#6366f1', strokeWidth: 1.5, strokeDasharray: '5 5' },
-              markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1' },
+              style: { stroke: '#0891b2', strokeWidth: 1.5, strokeDasharray: '5 5' },
+              markerEnd: { type: MarkerType.ArrowClosed, color: '#0891b2' },
             });
           }
         }
@@ -489,7 +489,16 @@ function Flow() {
 
     const layoutedModelNodes = getLayoutedElements(modelNodes, newEdges, 'TB');
     setNodes(layoutedModelNodes);
-    setEdges(newEdges);
+    
+    setEdges((prevEdges) => {
+      return newEdges.map((newEdge) => {
+        const existingEdge = prevEdges.find((e) => e.id === newEdge.id);
+        if (existingEdge) {
+          return { ...newEdge, data: { ...newEdge.data, ...existingEdge.data } };
+        }
+        return newEdge;
+      });
+    });
   }, [setNodes, setEdges]);
 
   React.useEffect(() => {
