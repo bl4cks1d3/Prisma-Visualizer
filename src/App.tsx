@@ -73,6 +73,7 @@ import {
   Activity,
   ChevronRight,
   ChevronDown,
+  Edit2,
   List as ListIcon
 } from 'lucide-react';
 import { 
@@ -90,9 +91,26 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toPng, toSvg } from 'html-to-image';
+import { jsPDF } from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
-import confetti from 'canvas-confetti';
 import { PrismaEnum } from '@/src/lib/prisma-parser';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 const DEFAULT_SCHEMA = `// Exemplo de Schema Prisma
 model User {
@@ -173,6 +191,148 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => 
   });
 };
 
+function SortableSimulationStep(props: any) {
+  const { 
+    step, 
+    idx, 
+    simulationResults, 
+    onRemove, 
+    isEditing, 
+    onEdit, 
+    onUpdateData, 
+    parsedSchema, 
+    mockData 
+  } = props;
+  
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: step.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 100 : 1,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  const model = parsedSchema?.models.find((m: any) => m.name === step.model);
+
+  return (
+    <div 
+      ref={setNodeRef} 
+      style={style} 
+      className="p-3 bg-zinc-900/50 border border-zinc-800 rounded-lg relative group touch-none"
+    >
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing p-1 hover:bg-zinc-800 rounded">
+            <ListIcon size={12} className="text-zinc-600" />
+          </div>
+          <Badge className={
+            step.type === 'INSERT' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+            step.type === 'DELETE' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
+            'bg-blue-500/10 text-blue-400 border-blue-500/20'
+          }>
+            {step.type}
+          </Badge>
+          <span className="text-xs font-mono font-bold">{step.model}</span>
+        </div>
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            className={`h-6 w-6 ${isEditing ? 'text-indigo-400' : 'text-zinc-600 hover:text-indigo-400'}`}
+            onClick={() => onEdit(isEditing ? null : step.id)}
+          >
+            <Edit2 size={12} />
+          </Button>
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            className="h-6 w-6 text-zinc-600 hover:text-rose-400"
+            onClick={() => onRemove(step.id)}
+          >
+            <Trash2 size={12} />
+          </Button>
+        </div>
+      </div>
+      
+      {isEditing ? (
+        <div className="space-y-3 mt-3 p-3 bg-black/40 rounded-md border border-zinc-800">
+          {model?.fields.filter((f: any) => !f.isList && (step.type !== 'DELETE' || f.isId)).map((field: any) => {
+            const isEnum = parsedSchema.enums.some((e: any) => e.name === field.type);
+            const isRelation = parsedSchema.models.some((m: any) => m.name === field.type);
+            
+            return (
+              <div key={field.name} className="space-y-1">
+                <Label className="text-[9px] text-zinc-500 uppercase font-bold">{field.name}</Label>
+                {isEnum ? (
+                  <Select value={step.data[field.name] ?? ""} onValueChange={(val) => onUpdateData(step.id, field.name, val)}>
+                    <SelectTrigger className="h-7 text-[10px] bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
+                    <SelectContent className="bg-zinc-900 border-zinc-800">
+                      {parsedSchema.enums.find((e: any) => e.name === field.type)?.values.map((v: any) => (
+                        <SelectItem key={v} value={v} className="text-[10px]">{v}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : isRelation ? (
+                  <Select value={step.data[field.name] ?? ""} onValueChange={(val) => onUpdateData(step.id, field.name, val)}>
+                    <SelectTrigger className="h-7 text-[10px] bg-zinc-950 border-zinc-800"><SelectValue placeholder="Relacionar..." /></SelectTrigger>
+                    <SelectContent className="bg-zinc-900 border-zinc-800">
+                      {(mockData[field.type] || []).filter((r: any) => !r._isNew).map((r: any, i: number) => (
+                        <SelectItem key={i} value={String(r.id || r.uuid || i)} className="text-[10px]">{String(r.id || r.uuid || `ID:${i}`)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : field.type === 'Boolean' ? (
+                  <Select value={String(step.data[field.name] ?? false)} onValueChange={(val) => onUpdateData(step.id, field.name, val === 'true')}>
+                    <SelectTrigger className="h-7 text-[10px] bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
+                    <SelectContent className="bg-zinc-900 border-zinc-800">
+                      <SelectItem value="true" className="text-[10px]">true</SelectItem>
+                      <SelectItem value="false" className="text-[10px]">false</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input 
+                    className="h-7 text-[10px] bg-zinc-950 border-zinc-800" 
+                    value={step.data[field.name] || ''} 
+                    onChange={(e) => onUpdateData(step.id, field.name, e.target.value)} 
+                  />
+                )}
+              </div>
+            );
+          })}
+          <Button 
+            size="sm" 
+            className="w-full h-7 text-[10px] bg-indigo-600 hover:bg-indigo-700 mt-2"
+            onClick={() => onEdit(null)}
+          >
+            Concluir Edição
+          </Button>
+        </div>
+      ) : (
+        <div className="text-[10px] font-mono text-zinc-500 bg-black/20 p-2 rounded border border-zinc-800/50">
+          {JSON.stringify(step.data, null, 2)}
+        </div>
+      )}
+
+      {simulationResults[idx] && (
+        <div className={`mt-2 p-2 rounded text-[10px] flex items-start gap-2 ${
+          simulationResults[idx].success ? 'bg-emerald-500/5 text-emerald-400 border border-emerald-500/10' : 'bg-rose-500/5 text-rose-400 border border-rose-500/10'
+        }`}>
+          {simulationResults[idx].success ? <CheckCircle size={12} className="shrink-0 mt-0.5" /> : <AlertCircle size={12} className="shrink-0 mt-0.5" />}
+          <span>{simulationResults[idx].message}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Flow() {
   const [schemaText, setSchemaText] = React.useState(DEFAULT_SCHEMA);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node[]>([]);
@@ -184,11 +344,37 @@ function Flow() {
   const [mockData, setMockData] = React.useState<Record<string, any[]>>({});
   const [selectedModelForPlayground, setSelectedModelForPlayground] = React.useState<string | null>(null);
   const [showEnumSidebar, setShowEnumSidebar] = React.useState(false);
+  const [showToolbar, setShowToolbar] = React.useState(true);
   const [simulationSteps, setSimulationSteps] = React.useState<any[]>([]);
+  const [editingStepId, setEditingStepId] = React.useState<string | null>(null);
   const [isSimulating, setIsSimulating] = React.useState(false);
   const [simulationResults, setSimulationResults] = React.useState<any[]>([]);
+  const [editingRecord, setEditingRecord] = React.useState<{model: string, index: number} | null>(null);
   const reactFlowWrapper = React.useRef<HTMLDivElement>(null);
   const { fitView } = useReactFlow();
+
+  const updateSimulationStepData = (stepId: string, field: string, value: any) => {
+    setSimulationSteps(prev => prev.map(s => s.id === stepId ? { ...s, data: { ...s.data, [field]: value } } : s));
+  };
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setSimulationSteps((items) => {
+        const oldIndex = items.findIndex((i) => i.id === active.id);
+        const newIndex = items.findIndex((i) => i.id === over.id);
+        return arrayMove(items, oldIndex, newIndex);
+      });
+      setSimulationResults([]);
+    }
+  };
 
   const updateDiagram = React.useCallback((schema: string) => {
     const result = parsePrismaSchema(schema);
@@ -218,6 +404,7 @@ function Flow() {
               targetHandle: `${field.type}-${targetIdField.name}-target`,
               label: field.name,
               animated: false,
+              type: 'smoothstep',
               style: { stroke: '#6366f1', strokeWidth: 1.5 },
               markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1' },
             });
@@ -249,7 +436,7 @@ function Flow() {
     });
   }, [nodes, searchQuery]);
 
-  const handleExport = async (format: 'png' | 'svg') => {
+  const handleExport = async (format: 'png' | 'svg' | 'pdf') => {
     if (reactFlowWrapper.current === null) return;
     
     const nodesBounds = getNodesBounds(nodes);
@@ -258,6 +445,30 @@ function Flow() {
     try {
       const el = reactFlowWrapper.current.querySelector('.react-flow__viewport') as HTMLElement;
       if (!el) return;
+
+      if (format === 'pdf') {
+        const dataUrl = await toPng(el, { 
+          backgroundColor: '#09090b', 
+          quality: 1, 
+          pixelRatio: 2,
+          width: nodesBounds.width + 100,
+          height: nodesBounds.height + 100,
+          style: {
+            transform: `translate(${-nodesBounds.x + 50}px, ${-nodesBounds.y + 50}px) scale(1)`,
+          }
+        });
+        
+        const pdf = new jsPDF({
+          orientation: nodesBounds.width > nodesBounds.height ? 'landscape' : 'portrait',
+          unit: 'px',
+          format: [nodesBounds.width + 100, nodesBounds.height + 100]
+        });
+        
+        pdf.addImage(dataUrl, 'PNG', 0, 0, nodesBounds.width + 100, nodesBounds.height + 100);
+        pdf.save(`prisma-schema-${new Date().getTime()}.pdf`);
+        toast.success(`Exportado como PDF com sucesso!`);
+        return;
+      }
 
       const dataUrl = format === 'png' 
         ? await toPng(el, { 
@@ -283,8 +494,7 @@ function Flow() {
       link.download = `prisma-schema-${new Date().getTime()}.${format}`;
       link.href = dataUrl;
       link.click();
-      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-      toast.success(`Exportado com sucesso!`);
+      toast.success(`Exportado como ${format.toUpperCase()} com sucesso!`);
     } catch (err) {
       console.error(err);
       toast.error('Erro ao exportar.');
@@ -313,8 +523,8 @@ function Flow() {
       newData[index] = { ...newData[index], _isNew: false };
       return { ...prev, [modelName]: newData };
     });
+    setEditingRecord(null);
     toast.success('Registro salvo com sucesso!');
-    confetti({ particleCount: 50, spread: 30, origin: { y: 0.8 } });
   };
 
   const generateDataForField = (modelName: string, index: number, fieldName: string, type: string) => {
@@ -350,6 +560,11 @@ function Flow() {
     });
   };
 
+  const clearAllData = () => {
+    setMockData({});
+    toast.info('Todos os dados foram limpos.');
+  };
+
   const runAutomatedTest = () => {
     if (!parsedSchema) return;
     
@@ -371,6 +586,10 @@ function Flow() {
       setSimulationResults(results);
       setTimeout(() => {
         setIsSimulating(false);
+        const allSuccess = results.every(r => r.success);
+        if (allSuccess) {
+          setMockData(tempMockData);
+        }
         resolve(results);
       }, 1000);
     }), {
@@ -378,10 +597,9 @@ function Flow() {
       success: (results: any) => {
         const allSuccess = (results as any[]).every(r => r.success);
         if (allSuccess) {
-          confetti({ particleCount: 150, spread: 100 });
-          return 'Simulação concluída! Fluxo validado.';
+          return 'Simulação concluída! Dados aplicados ao banco.';
         }
-        return 'Simulação concluída com alertas/erros.';
+        return 'Simulação concluída com alertas/erros. Nenhuma alteração foi aplicada.';
       },
       error: 'Erro na simulação.',
     });
@@ -393,10 +611,32 @@ function Flow() {
     
     if (!model) return { success: false, message: `Modelo ${modelName} não encontrado.` };
 
+    const operationData = { ...data };
+
     if (type === 'INSERT') {
+      // Handle ID generation if missing
+      const idField = model.fields.find(f => f.isId);
+      if (idField && !operationData[idField.name]) {
+        if (idField.default === 'autoincrement()') {
+          const existing = currentData[modelName] || [];
+          const maxId = existing.reduce((max: number, r: any) => Math.max(max, Number(r[idField.name]) || 0), 0);
+          operationData[idField.name] = maxId + 1;
+        } else {
+          operationData[idField.name] = Math.random().toString(36).substr(2, 9);
+        }
+      }
+
+      // Check for unique ID
+      if (idField && operationData[idField.name]) {
+        const existing = currentData[modelName] || [];
+        if (existing.some((r: any) => r[idField.name] == operationData[idField.name])) {
+          return { success: false, message: `Erro de chave primária: ID ${operationData[idField.name]} já existe em ${modelName}.` };
+        }
+      }
+
       // Check required fields
       for (const field of model.fields) {
-        if (!field.isOptional && !field.isList && field.default === '' && !data[field.name] && data[field.name] !== 0 && data[field.name] !== false) {
+        if (!field.isOptional && !field.isList && field.default === '' && !operationData[field.name] && operationData[field.name] !== 0 && operationData[field.name] !== false) {
           if (field.isId && field.default === 'autoincrement()') continue;
           return { success: false, message: `Campo obrigatório ausente: ${field.name}` };
         }
@@ -404,7 +644,7 @@ function Flow() {
         // Check relations
         if (field.relation && field.relation.fields && field.relation.fields.length > 0) {
           const relField = field.relation.fields[0];
-          const relValue = data[relField];
+          const relValue = operationData[relField];
           if (relValue) {
             const targetModel = field.type;
             const targetRecords = currentData[targetModel] || [];
@@ -418,8 +658,8 @@ function Flow() {
       }
       
       const updatedData = { ...currentData };
-      updatedData[modelName] = [...(currentData[modelName] || []), data];
-      return { success: true, message: `Inserção em ${modelName} validada.`, updatedData };
+      updatedData[modelName] = [...(currentData[modelName] || []), operationData];
+      return { success: true, message: `Inserção em ${modelName} realizada.`, updatedData };
     }
 
     if (type === 'DELETE') {
@@ -454,7 +694,7 @@ function Flow() {
         const idField = model.fields.find(f => f.isId)?.name || 'id';
         return r[idField] != data[idField];
       });
-      return { success: true, message: `Deleção em ${modelName} validada.`, updatedData };
+      return { success: true, message: `Deleção em ${modelName} realizada.`, updatedData };
     }
 
     if (type === 'UPDATE') {
@@ -482,7 +722,7 @@ function Flow() {
       const newRecords = [...(currentData[modelName] || [])];
       newRecords[recordIndex] = { ...newRecords[recordIndex], ...data };
       updatedData[modelName] = newRecords;
-      return { success: true, message: `Atualização em ${modelName} validada.`, updatedData };
+      return { success: true, message: `Atualização em ${modelName} realizada.`, updatedData };
     }
 
     return { success: true, message: 'Operação validada.' };
@@ -502,6 +742,10 @@ function Flow() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShowToolbar(!showToolbar)} className={`bg-zinc-900 border-zinc-800 hover:bg-zinc-800 ${!showToolbar ? 'text-indigo-400 border-indigo-500/30' : ''}`}>
+            {showToolbar ? <ChevronRight size={14} /> : <ChevronDown size={14} className="-rotate-90" />}
+          </Button>
+          <Separator orientation="vertical" className="h-6 mx-1 bg-zinc-800" />
           <Button variant="outline" size="sm" onClick={runAutomatedTest} className="bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-emerald-400">
             <CheckCircle2 size={14} className="mr-2" /> Testar Schema
           </Button>
@@ -515,9 +759,24 @@ function Flow() {
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
-          <Button variant="outline" size="sm" onClick={() => handleExport('png')} className="bg-zinc-900 border-zinc-800 hover:bg-zinc-800">
-            <Download size={14} className="mr-2" /> PNG
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger render={
+              <Button variant="outline" size="sm" className="bg-zinc-900 border-zinc-800 hover:bg-zinc-800">
+                <Download size={14} className="mr-2" /> Exportar
+              </Button>
+            } />
+            <DropdownMenuContent align="end" className="w-32 bg-zinc-900 border-zinc-800">
+              <DropdownMenuItem onClick={() => handleExport('png')}>
+                PNG
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport('svg')}>
+                SVG
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport('pdf')}>
+                PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Separator orientation="vertical" className="h-6 mx-1 bg-zinc-800" />
           <Button variant="outline" size="sm" onClick={() => fitView()} className="bg-zinc-900 border-zinc-800 hover:bg-zinc-800">
             <Layout size={14} className="mr-2" /> Fit
@@ -528,9 +787,17 @@ function Flow() {
         </div>
       </header>
 
-      <main className="flex-1 flex overflow-hidden">
-        <div className="w-[520px] border-r border-zinc-800 bg-[#09090b] flex flex-col shrink-0">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
+      <main className="flex-1 flex overflow-hidden relative">
+        <AnimatePresence mode="wait">
+          {showToolbar && (
+            <motion.div 
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 520, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ duration: 0.2, ease: "easeInOut" }}
+              className="border-r border-zinc-800 bg-[#09090b] flex flex-col shrink-0 overflow-hidden"
+            >
+              <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
             <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/20">
               <TabsList className="bg-transparent border-none p-0 h-auto gap-2">
                 <TabsTrigger value="editor" className="data-[state=active]:bg-zinc-800 h-8 px-3 text-xs">
@@ -566,7 +833,7 @@ function Flow() {
               />
             </TabsContent>
 
-            <TabsContent value="playground" className="flex-1 m-0 p-0 overflow-hidden flex flex-col">
+            <TabsContent value="playground" className="flex-1 m-0 p-0 overflow-hidden flex flex-col min-h-0">
               <div className="p-4 border-b border-zinc-800 bg-zinc-900/30">
                 <Label className="text-[10px] uppercase font-bold text-zinc-500 mb-2 block tracking-widest">Modelos</Label>
                 <div className="flex flex-wrap gap-2">
@@ -633,7 +900,7 @@ function Flow() {
                                   <div key={field.name} className="space-y-1.5">
                                     <Label className="text-[10px] text-zinc-500 font-mono">{field.name}</Label>
                                     {isEnum ? (
-                                      <Select value={record[field.name]} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val)}>
+                                      <Select value={record[field.name] ?? ""} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val)}>
                                         <SelectTrigger className="h-8 text-[11px] bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
                                         <SelectContent className="bg-zinc-900 border-zinc-800">
                                           {parsedSchema.enums.find(e => e.name === field.type)?.values.map(v => (
@@ -642,7 +909,7 @@ function Flow() {
                                         </SelectContent>
                                       </Select>
                                     ) : isRelation ? (
-                                      <Select value={record[field.name]} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val)}>
+                                      <Select value={record[field.name] ?? ""} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val)}>
                                         <SelectTrigger className="h-8 text-[11px] bg-zinc-950 border-zinc-800"><SelectValue placeholder="Relacionar..." /></SelectTrigger>
                                         <SelectContent className="bg-zinc-900 border-zinc-800">
                                           {(mockData[field.type] || []).filter(r => !r._isNew).map((r, i) => (
@@ -651,7 +918,7 @@ function Flow() {
                                         </SelectContent>
                                       </Select>
                                     ) : field.type === 'Boolean' ? (
-                                      <Select value={String(record[field.name])} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val === 'true')}>
+                                      <Select value={String(record[field.name] ?? false)} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val === 'true')}>
                                         <SelectTrigger className="h-8 text-[11px] bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
                                         <SelectContent className="bg-zinc-900 border-zinc-800">
                                           <SelectItem value="true" className="text-[11px]">true</SelectItem>
@@ -682,18 +949,21 @@ function Flow() {
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="simulador" className="flex-1 m-0 p-0 overflow-hidden flex flex-col">
+            <TabsContent value="simulador" className="flex-1 m-0 p-0 overflow-hidden flex flex-col min-h-0">
               <div className="p-4 border-b border-zinc-800 bg-zinc-900/30 flex items-center justify-between">
                 <div>
                   <h3 className="text-xs font-bold uppercase tracking-widest text-zinc-500">Fluxo de Teste</h3>
-                  <p className="text-[10px] text-zinc-600">Simule operações em cascata e integridade</p>
+                  <p className="text-[10px] text-zinc-600">Arraste para reordenar a execução</p>
                 </div>
                 <div className="flex gap-2">
                   <Button 
                     size="sm" 
                     variant="outline" 
                     className="h-8 text-[10px] bg-zinc-800 border-zinc-700"
-                    onClick={() => setSimulationSteps([])}
+                    onClick={() => {
+                      setSimulationSteps([]);
+                      setSimulationResults([]);
+                    }}
                   >
                     Limpar
                   </Button>
@@ -711,43 +981,31 @@ function Flow() {
 
               <ScrollArea className="flex-1">
                 <div className="p-4 space-y-4">
-                  {simulationSteps.map((step, idx) => (
-                    <div key={step.id} className="p-3 bg-zinc-900/50 border border-zinc-800 rounded-lg relative group">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <Badge className={
-                            step.type === 'INSERT' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-                            step.type === 'DELETE' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
-                            'bg-blue-500/10 text-blue-400 border-blue-500/20'
-                          }>
-                            {step.type}
-                          </Badge>
-                          <span className="text-xs font-mono font-bold">{step.model}</span>
-                        </div>
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
-                          className="h-6 w-6 text-zinc-600 opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={() => setSimulationSteps(prev => prev.filter(s => s.id !== step.id))}
-                        >
-                          <Trash2 size={12} />
-                        </Button>
-                      </div>
-                      
-                      <div className="text-[10px] font-mono text-zinc-500 bg-black/20 p-2 rounded border border-zinc-800/50">
-                        {JSON.stringify(step.data, null, 2)}
-                      </div>
-
-                      {simulationResults[idx] && (
-                        <div className={`mt-2 p-2 rounded text-[10px] flex items-start gap-2 ${
-                          simulationResults[idx].success ? 'bg-emerald-500/5 text-emerald-400 border border-emerald-500/10' : 'bg-rose-500/5 text-rose-400 border border-rose-500/10'
-                        }`}>
-                          {simulationResults[idx].success ? <CheckCircle size={12} className="shrink-0 mt-0.5" /> : <AlertCircle size={12} className="shrink-0 mt-0.5" />}
-                          <span>{simulationResults[idx].message}</span>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                  <DndContext 
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleDragEnd}
+                  >
+                    <SortableContext 
+                      items={simulationSteps.map(s => s.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      {simulationSteps.map((step, idx) => (
+                        <SortableSimulationStep 
+                          key={step.id} 
+                          step={step} 
+                          idx={idx as number} 
+                          simulationResults={simulationResults as any[]}
+                          onRemove={(id: string) => setSimulationSteps(prev => prev.filter(s => s.id !== id))}
+                          isEditing={editingStepId === step.id}
+                          onEdit={setEditingStepId}
+                          onUpdateData={updateSimulationStepData}
+                          parsedSchema={parsedSchema}
+                          mockData={mockData}
+                        />
+                      ))}
+                    </SortableContext>
+                  </DndContext>
 
                   <div className="pt-4 border-t border-zinc-800/50">
                     <Label className="text-[10px] uppercase font-bold text-zinc-500 mb-3 block">Adicionar Operação</Label>
@@ -755,11 +1013,11 @@ function Flow() {
                       {parsedSchema?.models.map(model => (
                         <div key={model.name}>
                           <DropdownMenu>
-                            <DropdownMenuTrigger>
+                            <DropdownMenuTrigger render={
                               <Button variant="outline" size="sm" className="h-8 text-[10px] w-full justify-between bg-zinc-900 border-zinc-800">
                                 {model.name} <Plus size={12} />
                               </Button>
-                            </DropdownMenuTrigger>
+                            } />
                             <DropdownMenuContent align="start" className="w-40 bg-zinc-900 border-zinc-800">
                               <DropdownMenuItem 
                                 className="text-xs text-emerald-400"
@@ -768,6 +1026,18 @@ function Flow() {
                                   model.fields.forEach(f => {
                                     if (!f.isList && !f.relation) {
                                       data[f.name] = generateMockValue(f.type, f.name);
+                                    } else if (f.relation && f.relation.fields && f.relation.fields.length > 0) {
+                                      // Try to correlate with existing data
+                                      const relField = f.relation.fields[0];
+                                      const targetModel = f.type;
+                                      const existingTargetRecords = mockData[targetModel] || [];
+                                      if (existingTargetRecords.length > 0) {
+                                        const refField = f.relation.references?.[0] || 'id';
+                                        const randomRecord = existingTargetRecords[Math.floor(Math.random() * existingTargetRecords.length)];
+                                        data[relField] = randomRecord[refField];
+                                      } else {
+                                        data[relField] = ''; // No data to correlate yet
+                                      }
                                     }
                                   });
                                   setSimulationSteps(prev => [...prev, {
@@ -784,11 +1054,15 @@ function Flow() {
                                 className="text-xs text-blue-400"
                                 onClick={() => {
                                   const idField = model.fields.find(f => f.isId)?.name || 'id';
+                                  const existingRecords = mockData[model.name] || [];
+                                  const lastRecord = existingRecords[existingRecords.length - 1];
+                                  const idValue = lastRecord ? lastRecord[idField] : '';
+                                  
                                   setSimulationSteps(prev => [...prev, {
                                     id: Math.random().toString(36).substr(2, 9),
                                     type: 'UPDATE',
                                     model: model.name,
-                                    data: { [idField]: '', title: 'Exemplo Update' }
+                                    data: { [idField]: idValue, title: 'Exemplo Update' }
                                   }]);
                                 }}
                               >
@@ -798,11 +1072,15 @@ function Flow() {
                                 className="text-xs text-rose-400"
                                 onClick={() => {
                                   const idField = model.fields.find(f => f.isId)?.name || 'id';
+                                  const existingRecords = mockData[model.name] || [];
+                                  const lastRecord = existingRecords[existingRecords.length - 1];
+                                  const idValue = lastRecord ? lastRecord[idField] : '';
+
                                   setSimulationSteps(prev => [...prev, {
                                     id: Math.random().toString(36).substr(2, 9),
                                     type: 'DELETE',
                                     model: model.name,
-                                    data: { [idField]: '' }
+                                    data: { [idField]: idValue }
                                   }]);
                                 }}
                               >
@@ -826,11 +1104,18 @@ function Flow() {
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="data" className="flex-1 m-0 p-0 overflow-hidden flex flex-col">
+            <TabsContent value="data" className="flex-1 m-0 p-0 overflow-hidden flex flex-col min-h-0">
+              <div className="p-4 border-b border-zinc-800 bg-zinc-900/30 flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-widest text-zinc-500">Banco de Dados Mock</h3>
+                <Button variant="outline" size="sm" onClick={clearAllData} className="h-7 text-[10px] text-rose-400 border-rose-500/20 hover:bg-rose-500/10">
+                  <Trash2 size={12} className="mr-2" /> Limpar Tudo
+                </Button>
+              </div>
               <ScrollArea className="flex-1 p-4">
                 <Accordion type="multiple" className="space-y-4">
-                  {Object.entries(mockData).map(([modelName, records]) => {
-                    const savedRecords = (records as any[]).filter(r => !r._isNew);
+                  {Object.entries(mockData).map(([modelName, recordsData]) => {
+                    const records = recordsData as any[];
+                    const savedRecords = records.filter(r => !r._isNew);
                     if (savedRecords.length === 0) return null;
                     return (
                       <AccordionItem key={modelName} value={modelName} className="border border-zinc-800 rounded-lg bg-zinc-900/20 px-4">
@@ -853,18 +1138,45 @@ function Flow() {
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {savedRecords.map((record, idx) => (
-                                  <TableRow key={idx} className="border-zinc-800 hover:bg-zinc-800/30">
-                                    {parsedSchema?.models.find(m => m.name === modelName)?.fields.filter(f => !f.isList && !parsedSchema.models.some(m => m.name === f.type)).map(f => (
-                                      <TableCell key={f.name} className="text-[10px] py-2 font-mono truncate max-w-[100px]">{String(record[f.name])}</TableCell>
-                                    ))}
-                                    <TableCell className="py-2">
-                                      <Button variant="ghost" size="icon" className="h-6 w-6 text-zinc-500 hover:text-red-400" onClick={() => deleteRecord(modelName, idx)}>
-                                        <Trash2 size={12} />
-                                      </Button>
-                                    </TableCell>
-                                  </TableRow>
-                                ))}
+                                {savedRecords.map((record) => {
+                                  const originalIndex = (records as any[]).indexOf(record);
+                                  return (
+                                    <TableRow key={originalIndex} className="border-zinc-800 hover:bg-zinc-800/30">
+                                      {parsedSchema?.models.find(m => m.name === modelName)?.fields.filter(f => !f.isList && !parsedSchema.models.some(m => m.name === f.type)).map(f => (
+                                        <TableCell key={f.name} className="text-[10px] py-2 font-mono truncate max-w-[100px]">{String(record[f.name])}</TableCell>
+                                      ))}
+                                      <TableCell className="py-2">
+                                        <div className="flex items-center gap-1">
+                                          <Button 
+                                            variant="ghost" 
+                                            size="icon" 
+                                            className="h-6 w-6 text-zinc-500 hover:text-indigo-400"
+                                            onClick={() => {
+                                              setSelectedModelForPlayground(modelName);
+                                              setActiveTab('playground');
+                                              setEditingRecord({ model: modelName, index: originalIndex });
+                                              setMockData(prev => {
+                                                const newData = [...prev[modelName]];
+                                                newData[originalIndex] = { ...newData[originalIndex], _isNew: true };
+                                                return { ...prev, [modelName]: newData };
+                                              });
+                                            }}
+                                          >
+                                            <Code size={12} />
+                                          </Button>
+                                          <Button 
+                                            variant="ghost" 
+                                            size="icon" 
+                                            className="h-6 w-6 text-zinc-500 hover:text-rose-400"
+                                            onClick={() => deleteRecord(modelName, originalIndex)}
+                                          >
+                                            <Trash2 size={12} />
+                                          </Button>
+                                        </div>
+                                      </TableCell>
+                                    </TableRow>
+                                  );
+                                })}
                               </TableBody>
                             </Table>
                           </div>
@@ -882,7 +1194,9 @@ function Flow() {
               </ScrollArea>
             </TabsContent>
           </Tabs>
-        </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <div className="flex-1 relative bg-[#09090b]" ref={reactFlowWrapper}>
           <ReactFlow
