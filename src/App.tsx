@@ -263,7 +263,7 @@ function SortableSimulationStep(props: any) {
       </div>
       
       {isEditing ? (
-        <div className="space-y-3 mt-3 p-3 bg-black/40 rounded-md border border-zinc-800">
+        <div className="space-y-3 mt-3 p-3 bg-black/40 rounded-md border border-zinc-800 max-h-[50vh] overflow-auto no-scrollbar">
           {model?.fields.filter((f: any) => !f.isList && (step.type !== 'DELETE' || f.isId)).map((field: any) => {
             const isEnum = parsedSchema.enums.some((e: any) => e.name === field.type);
             const isRelation = parsedSchema.models.some((m: any) => m.name === field.type);
@@ -851,8 +851,8 @@ function Flow() {
                 </div>
               </div>
               
-              <ScrollArea className="flex-1">
-                <div className="p-4 space-y-6">
+              <ScrollArea className="flex-1 min-h-0">
+                <div className="p-4 space-y-6 pb-36">
                   {selectedModelForPlayground ? (
                     <>
                       <div className="flex items-center justify-between">
@@ -867,74 +867,79 @@ function Flow() {
 
                       <div className="space-y-4">
                         {(mockData[selectedModelForPlayground] || []).filter(r => r._isNew).map((record, idx) => (
-                          <div key={idx} className="p-4 bg-zinc-900 border border-zinc-800 rounded-lg space-y-4 relative shadow-xl">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-mono text-zinc-500 uppercase">Novo Registro</span>
-                              <div className="flex items-center gap-2">
-                                <Button 
-                                  variant="ghost" 
-                                  size="icon" 
-                                  className="h-7 w-7 text-zinc-500 hover:text-indigo-400"
-                                  onClick={() => generateAllDataForRecord(selectedModelForPlayground, idx)}
-                                >
-                                  <Wand2 size={14} />
-                                </Button>
-                                <Button 
-                                  variant="ghost" 
-                                  size="icon" 
-                                  className="h-7 w-7 text-zinc-500 hover:text-red-400"
-                                  onClick={() => deleteRecord(selectedModelForPlayground, idx)}
-                                >
-                                  <X size={14} />
+                          <div key={idx} className="space-y-2">
+                            <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-lg space-y-4 relative shadow-xl max-h-[60vh] overflow-auto no-scrollbar">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-mono text-zinc-500 uppercase">Novo Registro</span>
+                                <div className="flex items-center gap-2">
+                                  <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    className="h-7 w-7 text-zinc-500 hover:text-indigo-400"
+                                    onClick={() => generateAllDataForRecord(selectedModelForPlayground, idx)}
+                                  >
+                                    <Wand2 size={14} />
+                                  </Button>
+                                  <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    className="h-7 w-7 text-zinc-500 hover:text-red-400"
+                                    onClick={() => deleteRecord(selectedModelForPlayground, idx)}
+                                  >
+                                    <X size={14} />
+                                  </Button>
+                                </div>
+                              </div>
+                              
+                              <div className="flex flex-col gap-4">
+                                {parsedSchema?.models.find(m => m.name === selectedModelForPlayground)?.fields.map(field => {
+                                  const isEnum = parsedSchema.enums.some(e => e.name === field.type);
+                                  const isRelation = parsedSchema.models.some(m => m.name === field.type);
+                                  if (field.isList) return null;
+
+                                  return (
+                                    <div key={field.name} className="space-y-1.5">
+                                      <Label className="text-[10px] text-zinc-500 font-mono">{field.name}</Label>
+                                      {isEnum ? (
+                                        <Select value={record[field.name] ?? ""} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val)}>
+                                          <SelectTrigger className="h-8 text-[11px] bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
+                                          <SelectContent className="bg-zinc-900 border-zinc-800">
+                                            {parsedSchema.enums.find(e => e.name === field.type)?.values.map(v => (
+                                              <SelectItem key={v} value={v} className="text-[11px]">{v}</SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      ) : isRelation ? (
+                                        <Select value={record[field.name] ?? ""} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val)}>
+                                          <SelectTrigger className="h-8 text-[11px] bg-zinc-950 border-zinc-800"><SelectValue placeholder="Relacionar..." /></SelectTrigger>
+                                          <SelectContent className="bg-zinc-900 border-zinc-800">
+                                            {(mockData[field.type] || []).filter(r => !r._isNew).map((r, i) => (
+                                              <SelectItem key={i} value={String(r.id || r.uuid || i)} className="text-[11px]">{String(r.id || r.uuid || `ID:${i}`)}</SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      ) : field.type === 'Boolean' ? (
+                                        <Select value={String(record[field.name] ?? false)} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val === 'true')}>
+                                          <SelectTrigger className="h-8 text-[11px] bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
+                                          <SelectContent className="bg-zinc-900 border-zinc-800">
+                                            <SelectItem value="true" className="text-[11px]">true</SelectItem>
+                                            <SelectItem value="false" className="text-[11px]">false</SelectItem>
+                                          </SelectContent>
+                                        </Select>
+                                      ) : (
+                                        <Input className="h-8 text-[11px] bg-zinc-950 border-zinc-800" value={record[field.name] || ''} onChange={(e) => updateRecordValue(selectedModelForPlayground, idx, field.name, e.target.value)} />
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div className="mt-4 flex justify-end">
+                                <Button className="h-8 px-4 w-full sm:w-44 text-[11px] bg-indigo-600 hover:bg-indigo-700" onClick={() => saveRecord(selectedModelForPlayground, idx)}>
+                                  <Save size={14} className="mr-2" /> Salvar Registro
                                 </Button>
                               </div>
                             </div>
-                            
-                            <div className="grid grid-cols-1 gap-4">
-                              {parsedSchema?.models.find(m => m.name === selectedModelForPlayground)?.fields.map(field => {
-                                const isEnum = parsedSchema.enums.some(e => e.name === field.type);
-                                const isRelation = parsedSchema.models.some(m => m.name === field.type);
-                                if (field.isList) return null;
-
-                                return (
-                                  <div key={field.name} className="space-y-1.5">
-                                    <Label className="text-[10px] text-zinc-500 font-mono">{field.name}</Label>
-                                    {isEnum ? (
-                                      <Select value={record[field.name] ?? ""} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val)}>
-                                        <SelectTrigger className="h-8 text-[11px] bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
-                                        <SelectContent className="bg-zinc-900 border-zinc-800">
-                                          {parsedSchema.enums.find(e => e.name === field.type)?.values.map(v => (
-                                            <SelectItem key={v} value={v} className="text-[11px]">{v}</SelectItem>
-                                          ))}
-                                        </SelectContent>
-                                      </Select>
-                                    ) : isRelation ? (
-                                      <Select value={record[field.name] ?? ""} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val)}>
-                                        <SelectTrigger className="h-8 text-[11px] bg-zinc-950 border-zinc-800"><SelectValue placeholder="Relacionar..." /></SelectTrigger>
-                                        <SelectContent className="bg-zinc-900 border-zinc-800">
-                                          {(mockData[field.type] || []).filter(r => !r._isNew).map((r, i) => (
-                                            <SelectItem key={i} value={String(r.id || r.uuid || i)} className="text-[11px]">{String(r.id || r.uuid || `ID:${i}`)}</SelectItem>
-                                          ))}
-                                        </SelectContent>
-                                      </Select>
-                                    ) : field.type === 'Boolean' ? (
-                                      <Select value={String(record[field.name] ?? false)} onValueChange={(val) => updateRecordValue(selectedModelForPlayground, idx, field.name, val === 'true')}>
-                                        <SelectTrigger className="h-8 text-[11px] bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
-                                        <SelectContent className="bg-zinc-900 border-zinc-800">
-                                          <SelectItem value="true" className="text-[11px]">true</SelectItem>
-                                          <SelectItem value="false" className="text-[11px]">false</SelectItem>
-                                        </SelectContent>
-                                      </Select>
-                                    ) : (
-                                      <Input className="h-8 text-[11px] bg-zinc-950 border-zinc-800" value={record[field.name] || ''} onChange={(e) => updateRecordValue(selectedModelForPlayground, idx, field.name, e.target.value)} />
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                            <Button className="w-full h-8 text-[11px] bg-indigo-600 hover:bg-indigo-700" onClick={() => saveRecord(selectedModelForPlayground, idx)}>
-                              <Save size={14} className="mr-2" /> Salvar Registro
-                            </Button>
+                            <div className="h-10" />
                           </div>
                         ))}
                       </div>
