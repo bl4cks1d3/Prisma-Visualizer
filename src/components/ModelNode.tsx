@@ -18,8 +18,8 @@ interface ModelNodeProps {
 
 export const ModelNode = ({ data }: ModelNodeProps) => {
   return (
-    <div className="bg-[#1e1e24] border border-zinc-800 rounded-md shadow-2xl min-w-[280px] overflow-hidden transition-all hover:border-indigo-500/50">
-      <div className="bg-[#18181b] px-3 py-2 border-b border-zinc-800 flex items-center justify-between">
+    <div className="bg-[#1e1e24] border border-zinc-800 rounded-md shadow-2xl min-w-[280px] transition-all hover:border-indigo-500/50">
+      <div className="bg-[#18181b] px-3 py-2 border-b border-zinc-800 flex items-center justify-between rounded-t-md overflow-hidden">
         <h3 className="font-bold text-zinc-100 font-mono text-xs tracking-tight">{data.name.toLowerCase()}</h3>
       </div>
       <div className="p-0">
@@ -35,13 +35,13 @@ export const ModelNode = ({ data }: ModelNodeProps) => {
                       type="target"
                       position={Position.Left}
                       id={`${data.name}-${field.name}-target`}
-                      className="!w-1.5 !h-1.5 !bg-indigo-400 !border-none !left-[-3px]"
+                      className="!opacity-0 !w-1 !h-1 !border-none !left-[-2px] !top-1/2 !-translate-y-1/2"
                     />
                     <Handle
                       type="source"
                       position={Position.Right}
                       id={`${data.name}-${field.name}-source`}
-                      className="!w-1.5 !h-1.5 !bg-indigo-400 !border-none !right-[-3px]"
+                      className="!opacity-0 !w-1 !h-1 !border-none !right-[-2px] !top-1/2 !-translate-y-1/2"
                     />
                     <div className="flex items-center gap-2">
                       <span className={`text-[11px] font-mono flex items-center gap-1.5 ${field.isId ? 'font-bold text-zinc-100' : 'text-zinc-300'}`}>

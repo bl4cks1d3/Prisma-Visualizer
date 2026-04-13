@@ -1,6 +1,8 @@
 
 export interface PrismaField {
   name: string;
+  mappedName?: string;
+  nativeType?: string;
   type: string;
   isId: boolean;
   isOptional: boolean;
@@ -17,7 +19,10 @@ export interface PrismaField {
 
 export interface PrismaModel {
   name: string;
+  mappedName?: string;
   fields: PrismaField[];
+  uniques: string[][];
+  indexes: string[][];
   documentation?: string;
 }
 
@@ -49,7 +54,7 @@ export function parsePrismaSchema(schema: string): PrismaSchema {
     if (line.startsWith('model ')) {
       const match = line.match(/model\s+(\w+)\s*{/);
       if (match) {
-        currentModel = { name: match[1], fields: [] };
+        currentModel = { name: match[1], fields: [], uniques: [], indexes: [] };
         models.push(currentModel);
       } else {
         errors.push(`Line ${i + 1}: Invalid model definition`);
@@ -92,10 +97,38 @@ export function parsePrismaSchema(schema: string): PrismaSchema {
         const isUnique = attributes.includes('@unique');
         const isUpdatedAt = attributes.includes('@updatedAt');
 
-        // Extract default
+        // Extract native type
+        let nativeType = undefined;
+        const dbTypeMatch = attributes.match(/@db\.(\w+)/);
+        if (dbTypeMatch) nativeType = dbTypeMatch[1].toLowerCase();
+
+        // Extract mapped name
+        let mappedName = undefined;
+        const mapMatch = attributes.match(/@map\("([^"]*)"\)/);
+        if (mapMatch) mappedName = mapMatch[1];
+
+        // Extract default - improved to handle nested parentheses like autoincrement()
         let defaultValue = '';
-        const defaultMatch = attributes.match(/@default\(([^)]*)\)/);
-        if (defaultMatch) defaultValue = defaultMatch[1];
+        const defaultMatch = attributes.match(/@default\s*\(/);
+        if (defaultMatch) {
+          const startIdx = defaultMatch.index!;
+          const openParenIdx = attributes.indexOf('(', startIdx);
+          
+          if (openParenIdx !== -1) {
+            let depth = 1;
+            let content = '';
+            for (let j = openParenIdx + 1; j < attributes.length; j++) {
+              const char = attributes[j];
+              if (char === '(') depth++;
+              else if (char === ')') {
+                depth--;
+                if (depth === 0) break;
+              }
+              content += char;
+            }
+            defaultValue = content.trim();
+          }
+        }
 
         // Extract relation
         let relation: PrismaField['relation'] = undefined;
@@ -116,6 +149,8 @@ export function parsePrismaSchema(schema: string): PrismaSchema {
 
         currentModel.fields.push({
           name,
+          mappedName,
+          nativeType,
           type,
           isId,
           isOptional,
@@ -126,12 +161,38 @@ export function parsePrismaSchema(schema: string): PrismaSchema {
           relation
         });
       }
+
+      // Model attributes
+      if (line.startsWith('@@map(')) {
+        const match = line.match(/@@map\("([^"]*)"\)/);
+        if (match) currentModel.mappedName = match[1];
+      }
+      if (line.startsWith('@@unique([')) {
+        const match = line.match(/@@unique\(\[([^\]]*)\]\)/);
+        if (match) {
+          const fields = match[1].split(',').map(s => {
+            const fieldName = s.trim().split('(')[0]; // Remove (sort: Desc) etc
+            return fieldName;
+          });
+          currentModel.uniques.push(fields);
+        }
+      }
+      if (line.startsWith('@@index([')) {
+        const match = line.match(/@@index\(\[([^\]]*)\]\)/);
+        if (match) {
+          const fields = match[1].split(',').map(s => {
+            const fieldName = s.trim().split('(')[0]; // Remove (sort: Desc) etc
+            return fieldName;
+          });
+          currentModel.indexes.push(fields);
+        }
+      }
     }
 
     // Inside enum
     if (currentEnum) {
-      const valueMatch = line.match(/^(\w+)$/);
-      if (valueMatch) {
+      const valueMatch = line.match(/^(\w+)/);
+      if (valueMatch && !line.startsWith('enum ')) {
         currentEnum.values.push(valueMatch[1]);
       }
     }

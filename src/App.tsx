@@ -116,6 +116,7 @@ import {
   ChatMessage
 } from '@/src/services/geminiService';
 import { PrismaEnum } from '@/src/lib/prisma-parser';
+import { convertPrismaToDBML } from '@/src/lib/dbml-converter';
 import {
   DndContext,
   closestCenter,
@@ -423,6 +424,8 @@ function Flow() {
   const [aiProvider, setAiProvider] = React.useState<AIProvider>('gemini');
   const [openRouterModel, setOpenRouterModel] = React.useState('google/gemini-2.0-pro-exp-02-05:free');
   const [showApiKeyDialog, setShowApiKeyDialog] = React.useState(false);
+  const [showDbmlDialog, setShowDbmlDialog] = React.useState(false);
+  const [dbmlContent, setDbmlContent] = React.useState('');
   const [chatHistory, setChatHistory] = React.useState<ChatMessage[]>([]);
   const reactFlowWrapper = React.useRef<HTMLDivElement>(null);
   const { fitView } = useReactFlow();
@@ -469,18 +472,32 @@ function Flow() {
         if (field.relation) {
           const targetModel = result.models.find(m => m.name === field.type);
           if (targetModel) {
-            const targetIdField = targetModel.fields.find(f => f.isId) || targetModel.fields[0];
-            newEdges.push({
-              id: `${model.name}-${field.name}-${field.type}`,
-              source: model.name,
-              target: field.type,
-              sourceHandle: `${model.name}-${field.name}-source`,
-              targetHandle: `${field.type}-${targetIdField.name}-target`,
-              animated: true,
-              type: 'relation',
-              style: { stroke: '#0891b2', strokeWidth: 1.5, strokeDasharray: '5 5' },
-              markerEnd: { type: MarkerType.ArrowClosed, color: '#0891b2' },
-            });
+            const hasFields = field.relation.fields && field.relation.fields.length > 0;
+            const otherSide = targetModel.fields.find(f => f.type === model.name && f.relation);
+            const otherHasFields = otherSide?.relation?.fields && otherSide.relation.fields.length > 0;
+
+            // Only create edge if this side has the fields, or if neither side has fields (M:N) and we are the first model
+            if (hasFields || (!hasFields && !otherHasFields && model.name <= targetModel.name)) {
+              let sourceFieldName = field.name;
+              let targetFieldName = targetModel.fields.find(f => f.isId)?.name || targetModel.fields[0].name;
+
+              if (hasFields) {
+                sourceFieldName = field.relation.fields![0];
+                targetFieldName = field.relation.references![0];
+              }
+
+              newEdges.push({
+                id: `${model.name}-${sourceFieldName}-${field.type}-${targetFieldName}`,
+                source: model.name,
+                target: field.type,
+                sourceHandle: `${model.name}-${sourceFieldName}-source`,
+                targetHandle: `${field.type}-${targetFieldName}-target`,
+                animated: true,
+                type: 'relation',
+                style: { stroke: '#0891b2', strokeWidth: 1.5, strokeDasharray: '5 5' },
+                markerEnd: { type: MarkerType.ArrowClosed, color: '#0891b2' },
+              });
+            }
           }
         }
       });
@@ -517,6 +534,41 @@ function Flow() {
       };
     });
   }, [nodes, searchQuery]);
+
+  const handleExportDBML = () => {
+    if (!parsedSchema) return;
+    try {
+      const dbml = convertPrismaToDBML(parsedSchema);
+      setDbmlContent(dbml);
+      setShowDbmlDialog(true);
+    } catch (err) {
+      console.error(err);
+      toast.error('Erro ao processar DBML.');
+    }
+  };
+
+  const handleDownloadDBML = () => {
+    try {
+      const blob = new Blob([dbmlContent], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'schema.dbml';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast.success('DBML baixado com sucesso!');
+    } catch (err) {
+      console.error(err);
+      toast.error('Erro ao baixar DBML.');
+    }
+  };
+
+  const handleCopyDBML = () => {
+    navigator.clipboard.writeText(dbmlContent);
+    toast.success('DBML copiado para a área de transferência!');
+  };
 
   const handleExport = async (format: 'png' | 'svg' | 'pdf') => {
     if (reactFlowWrapper.current === null) return;
@@ -900,6 +952,9 @@ function Flow() {
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => handleExport('pdf')}>
                 PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportDBML} className="text-indigo-400 font-bold">
+                DBML (dbdiagram.io)
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -1445,6 +1500,10 @@ function Flow() {
             connectionLineType={ConnectionLineType.SmoothStep}
             minZoom={0.1}
             maxZoom={2}
+            zoomOnPinch={true}
+            panOnScroll={true}
+            panOnDrag={true}
+            zoomOnScroll={false}
           >
             <Background color="#18181b" gap={20} size={1} />
             <Controls className="fill-zinc-100" />
@@ -1563,6 +1622,40 @@ function Flow() {
       </AnimatePresence>
 
       <Toaster theme="dark" position="bottom-right" />
+
+      <Dialog open={showDbmlDialog} onOpenChange={setShowDbmlDialog}>
+        <DialogContent className="sm:max-w-2xl bg-zinc-950 border-zinc-800 text-zinc-100">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Code className="size-4 text-indigo-400" />
+              Exportar DBML (dbdiagram.io)
+            </DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Copie o código abaixo e cole no <a href="https://dbdiagram.io" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">dbdiagram.io</a> para visualizar seu diagrama.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Textarea 
+              readOnly 
+              value={dbmlContent} 
+              className="min-h-[400px] max-h-[60vh] font-mono text-[11px] bg-black border-zinc-800 text-zinc-300 focus-visible:ring-indigo-500 overflow-y-auto"
+            />
+          </div>
+          <DialogFooter className="flex gap-2 sm:justify-between">
+            <Button variant="outline" onClick={() => setShowDbmlDialog(false)} className="border-zinc-800 text-zinc-400 hover:bg-zinc-900">
+              Fechar
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={handleCopyDBML} className="border-zinc-800 text-zinc-300 hover:bg-zinc-900">
+                Copiar
+              </Button>
+              <Button onClick={handleDownloadDBML} className="bg-indigo-600 hover:bg-indigo-500 text-white">
+                Baixar .dbml
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showApiKeyDialog} onOpenChange={setShowApiKeyDialog}>
         <DialogContent className="sm:max-w-md bg-zinc-950 border-zinc-800 text-zinc-100">
